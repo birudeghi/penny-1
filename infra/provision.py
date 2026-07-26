@@ -1263,7 +1263,23 @@ def main(argv: list[str]) -> int:
             gowa_changed = gowa_changed or bool(plan_prune(live[GOWA_SERVICE]))
 
         ensure_source(rw, console, repo=repo, branch=args.branch)
-        dns = ensure_domain(rw, console, domain=args.domain)
+        # NOT FATAL, and the reason is a real hour lost. Railway refused a root domain here, the
+        # Failure propagated, and `main` returned before the Deploy section below — so every
+        # service kept running with the environment it was CREATED with, which predates the whole
+        # Secrets section above. gowa went on signing its webhooks with its own compiled-in
+        # default while penny rejected all five retries with a 401, and the visible symptom was
+        # "Penny didn't say anything when I added her to the group".
+        #
+        # A domain is the one thing here the application does not need to run: Railway's generated
+        # `*.up.railway.app` already serves it. Losing the deploy to it inverts the priorities.
+        try:
+            dns = ensure_domain(rw, console, domain=args.domain)
+        except Failure as exc:
+            dns = None
+            console.warn(f"domain not attached: {exc}")
+            console.say("     Continuing — the services below still need their secrets loaded.")
+            console.say(f"     Railway refuses some apex domains. A subdomain (app.{args.domain})")
+            console.say("     is usually accepted; re-run with --domain set to it.")
 
         console.head("Deploy")
         if args.no_deploy:
