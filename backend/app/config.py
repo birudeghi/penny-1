@@ -258,7 +258,13 @@ class Settings(BaseSettings):
     # group; it goes into the welcome message, so a wrong value here is a dead link in the first
     # thing the product ever says. The default is this deployment's domain, which is what makes a
     # fork or a staging copy the only place that has to override it.
-    app_public_url: str = env_specific("https://pennyai.chat")
+    #
+    # `app.` AND NOT THE APEX. `pennyai.chat` is a different Railway application; it answers, it
+    # serves a Penny-shaped SPA, and it is not this deployment — which makes it the worst kind of
+    # wrong value, because every check short of "is the route I just shipped there" passes against
+    # it. This setting is also what `app.outbound` allow-lists links against, so pointing it at
+    # the apex would let model-authored text link a family to somebody else's application.
+    app_public_url: str = env_specific("https://app.pennyai.chat")
     # CODE-DEFAULT — the kill switch. False makes an unknown group a silent 200 again, which is
     # the pre-onboarding behaviour and the thing to reach for if the WhatsApp number gets out.
     # It is a commit rather than a dashboard toggle on purpose: a deploy is ~2 minutes and the
