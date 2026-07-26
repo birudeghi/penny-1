@@ -137,6 +137,56 @@ function summarise(report: Report): ReportSummary {
   return { id, title, period_start, period_end, status, generated_at }
 }
 
+/**
+ * The offline generation.
+ *
+ * The seeded fixture list carries one report that is permanently `running`, which is a fine
+ * still life and a useless demo: the panel's whole point is the *transition* from "reading the
+ * record" to a document, and that takes tens of seconds against the real backend. So the demo
+ * drives that report off a clock — `pending`, then `running`, then the finished write-up — and
+ * refuses a second generation the way the real daily limit does.
+ */
+const GENERATED_REPORT_ID = ALL_REPORTS[0]?.id ?? 'demo-report'
+const GENERATION_MS = 9_000
+
+let reportStartedAt: number | null = null
+
+function generating(): boolean {
+  return reportStartedAt !== null && Date.now() - reportStartedAt < GENERATION_MS
+}
+
+/** The reports list, with the generated one's status computed from the clock. */
+function demoReports(): Report[] {
+  const [seeded, ...rest] = ALL_REPORTS
+  if (!seeded) return []
+  if (reportStartedAt === null) return rest
+  if (generating()) {
+    const elapsed = Date.now() - reportStartedAt
+    return [{ ...seeded, status: elapsed < 1_500 ? 'pending' : 'running' }, ...rest]
+  }
+  // Finished: the seeded report's period and title, filled in with a real write-up. Borrowed
+  // from the completed fixture below it, because hand-writing a second one would only mean two
+  // documents to keep honest.
+  const finished = rest[0]
+  return [
+    {
+      ...seeded,
+      ...(finished
+        ? {
+            summary: finished.summary,
+            sections: finished.sections,
+            questions_for_the_doctor: finished.questions_for_the_doctor,
+            watch_items: finished.watch_items,
+            data_gaps: finished.data_gaps,
+          }
+        : {}),
+      status: 'complete',
+      generated_at: new Date(reportStartedAt + GENERATION_MS).toISOString(),
+    },
+    ...rest,
+  ]
+}
+
 /** Mirrors the real progression so the 2s poller has something to stop on. */
 function importStatus(): ImportStatus {
   const total = 2114
@@ -306,11 +356,24 @@ async function respond(method: string, path: string, query: URLSearchParams, ini
   }
 
   if (method === 'POST' && head === 'reports' && second === 'generate') {
-    return problem(429, 'A report was already generated today.')
+    // The thin-record refusal, on the households that have nothing in them. A 422 rather than a
+    // failed report: there is no document coming, so there is nothing to poll and nothing to
+    // leave behind in the list.
+    if (BLANK) {
+      return problem(
+        422,
+        'There is not enough in the record yet to write a summary. Penny needs a few more entries first.',
+      )
+    }
+    if (reportStartedAt !== null && !generating()) {
+      return problem(429, 'A report was already generated today.')
+    }
+    reportStartedAt = Date.now()
+    return json({ report_id: GENERATED_REPORT_ID, status: 'pending' }, 202)
   }
   if (method === 'GET' && head === 'reports') {
-    if (!second) return json(ALL_REPORTS.map(summarise))
-    const report = ALL_REPORTS.find((candidate) => candidate.id === second)
+    if (!second) return json(demoReports().map(summarise))
+    const report = demoReports().find((candidate) => candidate.id === second)
     return report ? json(report) : notFound()
   }
 

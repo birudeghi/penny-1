@@ -26,3 +26,4 @@ def _load(name: str) -> tuple[str, str]:
 
 EXTRACT_PROMPT, EXTRACT_PROMPT_VERSION = _load("extract.md")
 MERGE_PROMPT, MERGE_PROMPT_VERSION = _load("merge.md")
+REPORT_PROMPT, REPORT_PROMPT_VERSION = _load("report.md")
