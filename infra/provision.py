@@ -222,7 +222,7 @@ def tick_command() -> str:
     url = f"{_service_domain(PENNY_SERVICE)}:{PENNY_PORT}{TICK_PATH}"
     return (
         "sh -c 'while true; do "
-        f'curl -fsS -m {TICK_TIMEOUT_SECONDS} -X POST '
+        f"curl -fsS -m {TICK_TIMEOUT_SECONDS} -X POST "
         f'-H "{TICK_SECRET_HEADER}: $INTERNAL_TICK_SECRET" {url}; '
         f"sleep {TICK_INTERVAL_SECONDS}; done'"
     )
@@ -233,7 +233,7 @@ def tick_vars() -> list[Var]:
 
     `RAILWAY_RUN_COMMAND` is Railway's own override for a service's start command, and it is the
     one thing in this file that could not be proven from the repository — the CLI verified at
-    5.27.0 has no start-command flag, so this is the mechanism reached for instead. It fails
+    5.27.0 and 5.28.1 has no start-command flag, so this is the mechanism instead. It fails
     SAFELY if Railway ignores it: the image's entrypoint is `curl` with no arguments, so the
     service crash-loops visibly and ticks nothing, rather than quietly running something else.
     `report_manual_steps` prints the command so an operator can paste it into the dashboard.
@@ -889,7 +889,7 @@ def report_manual_steps(console: Console, *, domain: str, dns: dict[str, Any] | 
     console.say("     ignored RAILWAY_RUN_COMMAND — paste this into its start command instead:")
     console.say(f"       {tick_command()}")
     console.say("     This is the ONE thing here that could not be proven from the repository:")
-    console.say("     the CLI verified at 5.27.0 has no start-command flag. Until it ticks, a")
+    console.say("     no CLI through 5.28.1 has a start-command flag. Until it ticks, a")
     console.say("     household that goes quiet never finishes extracting.")
 
     console.say("\n  5. Verify — docs/deployment.md#verify.")
@@ -984,9 +984,7 @@ def self_test() -> int:
         )
     )
     checks.append((f"tick command sends {TICK_SECRET_HEADER}", TICK_SECRET_HEADER in command))
-    checks.append(
-        ("tick targets penny's private port", f":{PENNY_PORT}{TICK_PATH}" in command)
-    )
+    checks.append(("tick targets penny's private port", f":{PENNY_PORT}{TICK_PATH}" in command))
     # A container that EXITS is restarted by Railway, which would turn the schedule into a hot
     # loop against an endpoint that spends money. It must sleep instead.
     checks.append(("tick sleeps between runs rather than exiting", "sleep" in command))

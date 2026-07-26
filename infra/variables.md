@@ -71,7 +71,7 @@ lives in Postgres via `DB_URI`, not on the volume.
 | `RAILWAY_RUN_COMMAND` | INFRA | `sh -c 'while true; do curl … ; sleep 3600; done'` | The schedule, in the repository. **`sh -c` is load-bearing**: Railway runs a start command without a shell, so `$INTERNAL_TICK_SECRET` would reach curl as 21 literal characters. **The sleep is too**: a service that exits is restarted, so a one-shot `curl` here would be a hot loop against an endpoint that spends money at OpenAI. Composed by `tick_command()` in `infra/provision.py`; `--self-test` asserts both properties. |
 
 This is the one service whose start command the provisioner cannot prove it set — the CLI verified
-at 5.27.0 has no flag for it, so `RAILWAY_RUN_COMMAND` is the mechanism reached for instead. It
+at 5.27.0 and 5.28.1 has no flag for it, so `RAILWAY_RUN_COMMAND` is the mechanism instead. It
 fails safely: if Railway ignores it the image's entrypoint is `curl` with no arguments, so the
 service crash-loops visibly and ticks nothing. `provision.py` prints the exact command to paste
 into the dashboard for that case.

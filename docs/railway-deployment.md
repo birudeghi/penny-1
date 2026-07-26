@@ -55,7 +55,7 @@ service, `tick`: a pinned `curlimages/curl` container whose start command POSTs 
 an hour, forever.
 
 **It does not use Railway's cron schedule field, and that is deliberate.** How cron is configured on
-Railway is still unverified here — the CLI verified at 5.27.0 has no start-command or schedule flag —
+Railway is still unverified here — neither CLI 5.27.0 nor 5.28.1 has a start-command or schedule flag —
 and the failure mode of guessing is expensive: a service created *without* a schedule is an ordinary
 service, and Railway restarts an ordinary service that exits, so a cron container whose command is
 one `curl` becomes a hot loop against an endpoint that spends money at OpenAI. A container that

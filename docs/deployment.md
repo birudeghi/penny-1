@@ -23,7 +23,7 @@ Related documents, cross-linked rather than repeated:
 
 | | |
 |---|---|
-| Railway CLI | `brew install railway` — verified against **5.27.0** |
+| Railway CLI | `brew install railway` — verified against **5.27.0** and **5.28.1** |
 | A Railway login | `railway login` |
 | A workspace that can create projects | **not** the personal workspace if its trial has expired; see [Traps](#things-that-will-bite-you) |
 | A verified GitHub account on Railway | railway.com/verify, **before** deploying. An unverified account gets a Limited Trial with *"restricted outbound network access and only a limited set of ports"*, which breaks GOWA's WhatsApp websocket. Go straight to Hobby. |
@@ -103,7 +103,7 @@ them.
 4. **Confirm the `tick` service is looping** — `railway logs --service tick` should show one POST an
    hour and nothing else. If it is *restarting*, Railway ignored `RAILWAY_RUN_COMMAND`; paste the
    command the script printed into the service's start command by hand. This is the one thing in the
-   deployment that the provisioner cannot prove it set (the CLI verified at 5.27.0 has no flag for
+   deployment that the provisioner cannot prove it set (neither 5.27.0 nor 5.28.1 has a flag for
    it), and until it ticks, a household that goes quiet never finishes extracting and a care-profile
    re-extraction never drains. See [`infra/variables.md`](../infra/variables.md#tick-the-scheduled-caller-curlimagescurl8111).
 
