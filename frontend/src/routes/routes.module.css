@@ -96,6 +96,55 @@
   margin-left: 8px;
 }
 
+/*
+ * The household's name leaves on a phone. Measured at 390px the header was 80px tall because
+ * "Penny The Doyles" wrapped to two lines and the nav collided with it — 9.5% of the viewport
+ * spent on chrome, on the screen with the least of it. The brand alone still answers "what site
+ * is this", which is the only job the wordmark has; whose household it is, is answered by the
+ * care recipient's name two rows below in far larger type.
+ */
+@media (max-width: 639px) {
+  .brandSub {
+    display: none;
+  }
+}
+
+/*
+ * 44px targets on touch. The nav links measured 36px, which is fine under a mouse and under the
+ * minimum for a thumb. Applied by POINTER rather than by width: a small window on a laptop is
+ * still a mouse, and a large tablet is still a thumb — the input device is the thing that
+ * decides how big a target has to be, and `any-pointer: coarse` is how you ask.
+ */
+@media (any-pointer: coarse), (max-width: 639px) {
+  .navLink,
+  .nav .button {
+    /* `border-box`, or `min-height` stacks on top of the padding and a 44px target becomes a
+       56px one — which then sets the height of the whole bar. 44 is a floor, not an addition. */
+    box-sizing: border-box;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
+}
+
+/*
+ * The chrome gives back its gutters on a phone. 2rem each side is 68px of a 390px screen spent
+ * on margin, which is what forced the nav onto a second line and made the header 80px tall.
+ */
+@media (max-width: 639px) {
+  .headerInner {
+    /* 12px, not 16. At 390px the brand (45) plus the nav (305) plus 32px of gutter plus the 8px
+       gap came to exactly 390 — the width of the screen — so the nav wrapped and the bar went
+       to 80px. Four pixels of gutter buy back a whole row. */
+    padding-inline: 12px;
+    gap: 8px;
+  }
+
+  .navLink {
+    padding-inline: 8px;
+  }
+}
+
 .nav {
   display: flex;
   gap: 4px;

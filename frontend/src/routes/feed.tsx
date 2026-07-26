@@ -26,7 +26,7 @@ import { Link } from 'react-router'
 
 import { useFeed, useMembers, useSession, useUpcoming } from '../api/queries'
 import { ErrorState, FeedSkeleton, RereadBanner } from '../components'
-import { ContextColumn } from '../components/context-column'
+import { ContextColumn, MobileFacts, MobileReference } from '../components/context-column'
 import { PersonHeader } from '../components/person-header'
 import { Timeline } from '../components/timeline'
 import { createPeople, PeopleProvider } from '../lib/people'
@@ -74,6 +74,8 @@ export function FeedRoute() {
             />
           )}
 
+          <MobileFacts profile={household?.care_profile} className="mb-8" />
+
           <div className="flex min-w-0 gap-14">
             <div className="min-w-0 flex-1">
               {/* A failed refetch renders above whatever is already on screen rather than
@@ -110,7 +112,7 @@ export function FeedRoute() {
                     type="button"
                     disabled={feed.isFetchingNextPage}
                     onClick={() => void feed.fetchNextPage()}
-                    className="rounded-full border border-rule px-4 py-2 text-[13px] font-medium text-penny transition-colors hover:bg-band disabled:opacity-50"
+                    className="inline-flex min-h-11 items-center rounded-full border border-rule px-4 py-2 text-[13px] font-medium text-penny transition-colors hover:bg-band disabled:opacity-50"
                   >
                     {feed.isFetchingNextPage ? 'Loading…' : 'Load older entries'}
                   </button>
@@ -128,6 +130,7 @@ export function FeedRoute() {
                   to go further back.
                 </p>
               ) : null}
+              <MobileReference profile={household?.care_profile} />
             </div>
 
             <ContextColumn

@@ -229,6 +229,12 @@ export function TimelineEntry({
                     'ml-auto text-[12.5px] text-muted-foreground transition-opacity',
                     'sm:pointer-fine:opacity-0 group-hover:opacity-100 hover:text-foreground',
                     'focus-visible:opacity-100',
+                    // A 44px TARGET AROUND A 23px WORD. The padding grows the hit area and the
+                    // negative margin gives the space back to the layout, so the button lands in
+                    // exactly the same place it did before and is now tappable. This is the
+                    // control that corrects a wrong dose; measured at 23x24 on a phone, which is
+                    // a quarter of the minimum, on the device where the correction gets typed.
+                    'inline-flex min-h-[44px] items-center px-3 py-3 -my-3 -mr-3',
                   )}
                 >
                   Edit

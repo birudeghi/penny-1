@@ -95,7 +95,7 @@ export function ContextColumn({
 
 /** The prototype's `action` slot went with the panels that had actions; a label with a dead
  *  button on it is worse than a label. */
-function PanelLabel({ children }: { children: ReactNode }) {
+export function PanelLabel({ children }: { children: ReactNode }) {
   return (
     <h3 className="text-[10.5px] font-semibold tracking-[0.1em] text-muted-foreground">
       {children}
@@ -152,9 +152,14 @@ const VITALS: VitalRow[] = [
  * "NOT RECORDED", NOT A BLANK AND NOT "NONE". A blank cell cannot be told from a component that
  * failed to render, and "None" is a clinical claim nobody made.
  */
-function VitalsBand({ profile }: { profile: CareProfileFacts | undefined }) {
+export function VitalsBand({ profile }: { profile: CareProfileFacts | undefined }) {
   return (
-    <dl className="space-y-3.5 rounded-lg bg-band px-4 py-4">
+    // TWO-UP BELOW `lg`, STACKED IN THE RAIL. The rail is 330px, where a second column would
+    // leave 150px per value and wrap "Mobile with a frame indoors" every two words. A phone is
+    // 390px across and 844px down, so the scarce axis flips: stacked, these four measured 332px
+    // and pushed the first entry off the bottom of the screen. Same content, same order, and the
+    // measure that is actually short gets the space.
+    <dl className="grid grid-cols-2 gap-x-4 gap-y-3.5 rounded-lg bg-band px-4 py-4 lg:block lg:space-y-3.5">
       {VITALS.map(({ label, read, alert }) => {
         const vital = profile ? read(profile) : null
         // Empty-after-trim counts as absent, the same rule `Vital._clean_value` applies
@@ -200,13 +205,16 @@ function VitalsBand({ profile }: { profile: CareProfileFacts | undefined }) {
  * is empty; a heading over nothing just says the record is thin, which the timeline already says
  * better. A blank ALLERGIES row is itself the clinical information.
  */
-function ProfileList({ label, items }: { label: string; items: string[] }) {
+export function ProfileList({ label, items }: { label: string; items: string[] }) {
   const values = items.map((item) => item.trim()).filter(Boolean)
   if (values.length === 0) return null
   return (
     <section>
-      <PanelLabel>{label}</PanelLabel>
-      <div className="mt-4 space-y-2.5">
+      {/* Blank when the caller has already labelled it — the phone layout puts the label in a
+          `<summary>` so the block can be collapsed, and a second heading inside would be a
+          duplicate a screen reader reads twice. */}
+      {label ? <PanelLabel>{label}</PanelLabel> : null}
+      <div className={label ? 'mt-4 space-y-2.5' : 'space-y-2.5'}>
         {values.map((value) => (
           <div key={value} className="text-[13.5px] leading-snug font-medium">
             {value}
@@ -231,4 +239,72 @@ function countdown(iso: string, timeZone: string, now = new Date()): string {
   if (days <= 0) return 'Today'
   if (days === 1) return 'Tomorrow'
   return `In ${days} days`
+}
+
+/**
+ * THE PHONE LAYOUT for everything the right rail holds. `lg:hidden`, and its desktop twin is
+ * `ContextColumn` above — both compose the SAME `VitalsBand` and `ProfileList`, so there is one
+ * implementation of each block and no second copy to drift.
+ *
+ * WHY THE FOUR VITALS ARE ABOVE THE TIMELINE AND NOTHING ELSE IS. Until now the whole column was
+ * `hidden lg:flex`, so on a phone the allergies row did not exist — not collapsed, not behind a
+ * tap, absent. Penny is a WhatsApp product; the family is on their phones. The reader this band
+ * is for is a daughter in a hospital corridor at 3am deciding something, and a field that costs
+ * her a tap has already failed her. So the four render on open, before the record.
+ *
+ * Everything else is reference, not emergency: medications, conditions and who contributes are
+ * read deliberately, not glanced at. They collapse BELOW the timeline, because the record is what
+ * the page is for and stacking the full column on top would push the first entry off the screen
+ * on every visit.
+ *
+ * "Coming up" is not repeated here. It is the one block whose desktop job — sitting level with a
+ * timeline you are scrolling past — has no phone equivalent, and its content is upcoming
+ * appointments which are also entries in the record itself.
+ */
+export function MobileFacts({
+  profile,
+  className = '',
+}: {
+  profile: CareProfileFacts | undefined
+  className?: string
+}) {
+  return (
+    <div className={`lg:hidden ${className}`}>
+      <VitalsBand profile={profile} />
+    </div>
+  )
+}
+
+/**
+ * The reference blocks, below the record, closed until asked for.
+ *
+ * `<details>` and not a state hook: it is keyboard accessible, screen-reader announced and
+ * findable by the browser's own in-page search without a line of JavaScript. §4.5's rule that
+ * interpretation stays closed until somebody asks for it applies to reference material too.
+ */
+export function MobileReference({ profile }: { profile: CareProfileFacts | undefined }) {
+  const people = usePeople()
+  const blocks: { label: string; items: string[] }[] = [
+    { label: 'Medications', items: profile?.medications ?? [] },
+    { label: 'Living with', items: profile?.conditions ?? [] },
+    { label: 'Cared by', items: people.all.map((person) => person.name) },
+  ]
+  const present = blocks.filter((block) => block.items.length > 0)
+  if (present.length === 0) return null
+
+  return (
+    <div className="mt-10 space-y-2 lg:hidden">
+      {present.map(({ label, items }) => (
+        <details key={label} className="border-t border-rule pt-3">
+          {/* 44px minimum, and the whole row is the target rather than the word. */}
+          <summary className="flex min-h-[44px] cursor-pointer items-center text-[10.5px] font-semibold tracking-[0.1em] text-muted-foreground">
+            {label.toUpperCase()}
+          </summary>
+          <div className="pb-2">
+            <ProfileList label="" items={items} />
+          </div>
+        </details>
+      ))}
+    </div>
+  )
 }

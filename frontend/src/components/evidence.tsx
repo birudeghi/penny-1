@@ -49,7 +49,10 @@ export function Evidence({
     <Collapsible open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger
         className={cn(
-          'inline-flex items-center gap-1.5 rounded-full border border-rule px-3.5 py-[7px]',
+          // `min-h-11` is 44px: this is the control that opens the verbatim message behind an
+          // entry, and on a phone it measured 40. The pill's own padding sets its look; the
+          // floor only ever grows the target, never the type.
+          'inline-flex min-h-11 items-center gap-1.5 rounded-full border border-rule px-3.5 py-[7px]',
           'text-[12.5px] font-medium text-penny transition-colors hover:bg-band',
         )}
       >

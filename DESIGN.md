@@ -519,21 +519,42 @@ the system default, and following the OS is explicitly declined.
 These are open, not forgotten. Writing them down is the point of this section — an unwritten gap gets
 filled by whoever touches the file next, badly.
 
-### 5.1 Everything below `lg`
+### 5.1 Below `lg` — decided, except at the very bottom
 
-There is no small-screen design. What exists today is two escape hatches, and neither is a decision:
+This section used to say there was no small-screen design. There is one now, and these are the
+decisions rather than escape hatches.
 
-- The context column is `hidden … lg:flex`. Below `lg` the vitals, medications, conditions and carers
-  **vanish** — allergies included. That is acceptable in a desktop prototype and not acceptable in a
-  product. Where those facts go on a phone is undecided.
-- An entry photograph is `hidden … sm:block`. It disappears rather than reflowing.
-- The `[104px, 26px, 1fr]` grid, the 1400px measure, the 330px column and the `px-8 xl:px-12` gutters
-  have no narrow-screen behaviour at all. A 104px date gutter plus a 26px node plus two 20px gaps is
-  170px of chrome before the first character of content — untenable at 390px wide.
+**The record.** Below `sm` the 104px date gutter and the spine are gone. The date moves inside the
+card as an eyebrow beside the kind node, and the card starts on the page's left edge — so §3.5's
+"one straight line down the left edge" is preserved by dropping the gutter rather than broken by
+keeping it. `timeline-entry.tsx`'s docstring argues each of the three rules in full. The entry
+photograph reflows to the card's width capped at 280px instead of disappearing; a photo of a rash
+beats every description of one, and the phone is where it gets looked at.
 
-Open questions nobody has answered: does the spine survive on a phone, or does the date become an
-inline eyebrow above each card? Does the context column become a sheet, a section above the timeline,
-or a second screen — and if a second screen, does that reintroduce the navigation §4.2 deleted?
+**The standing facts.** The context column no longer vanishes. The four vitals render as a 2-up
+band directly under the name and above the timeline, so allergies are on screen the moment the
+page opens — the reader they exist for is deciding something in a hurry, and a field that costs
+her a tap has already failed her. Stacked they measured 332px and pushed the first entry off the
+bottom of a 390px screen; two-up they are 212px and the record starts at 534px, above the fold.
+
+Medications, Living with and Cared by are reference rather than emergency. They collapse into
+`<details>` blocks BELOW the timeline, because the record is what the page is for. "Coming up" is
+not repeated on a phone: its desktop job is to sit level with a timeline you are scrolling past,
+which has no small-screen equivalent, and its contents are entries in the record anyway.
+
+Both layouts compose the SAME `VitalsBand` and `ProfileList`. There is one implementation of each
+block and no second copy to drift — a duplicated band shipped once already and rendered twice.
+
+**Touch.** 44px minimum on any coarse pointer or under 640px. The edit control was 23×24 — the
+button that corrects a wrong dose, at a quarter of the minimum, on the device where the correction
+gets typed. Its padding grows the target and a negative margin gives the space back, so it lands
+where it always did. Applied by POINTER as well as by width: a small window on a laptop is still a
+mouse, a large tablet is still a thumb.
+
+**Still open: 360px and narrower.** At 360 the four nav items plus the wordmark do not fit on one
+line and the header goes to 80px. Fixable only by changing what the navigation *is* on a phone —
+an icon row, or a menu — and §4.2 deleted navigation on purpose, so that is a design decision
+nobody has made rather than a bug to squash. 390px and up is correct today.
 
 ### 5.2 Motion
 
