@@ -1,127 +1,107 @@
 # Penny
 
-Families caring for an elderly parent lose the thread of shared care: nobody has a record of who did
-what, what happened at the appointment, or when the dizziness started. The family already coordinates
-in WhatsApp, so Penny reads that conversation, extracts structured care events, and renders a
-browsable history feed, upcoming appointments, and periodic LLM care-management reports.
+**A care assistant that lives in the family group chat.** Add Penny's WhatsApp number to the
+group where a family already coordinates care, and she quietly turns their day-to-day messages
+into a shared, structured care record — a timeline of symptoms, medications and appointments
+that nobody had to sit down and write.
 
-A website, not a mobile app. Pre-product, aimed at 1–5 test families of ~3–8 members — optimised for a
-demoable vertical slice, not for scale.
+**Live:** [app.pennyai.chat](https://app.pennyai.chat) — the front door explains itself.
 
-## Layout
+## What it does
+
+Families caring for an elderly parent lose the thread: nobody remembers when the dizziness
+started, what the GP changed at the last appointment, or which sibling collected the
+prescription. That history exists — it's scattered across months of WhatsApp messages.
+
+Penny reads the group's conversation and extracts it into structure:
+
+- **A care timeline** — "Amlodipine stopped", "Up twice overnight, better than last week" —
+  each entry linked to the actual messages (and photos, and voice notes) it came from.
+- **Standing facts** — medications, conditions, allergies, baseline mobility — kept current
+  as the chat mentions them, confirmed or corrected by the family on the website.
+- **Upcoming appointments**, pulled from messages like "cardiology follow-up on the 6th".
+- **Periodic care reports** written by an LLM over the accumulated record.
+
+Onboarding is one action with zero setup: add Penny to the group. That provisions the
+household, and she replies in the chat with the website link and the family's shared
+credentials. She only ever speaks when @-mentioned; the rest of the time she reads silently.
+
+## Who it's for
+
+The 3–8 relatives sharing care of one person — typically adult siblings coordinating around
+an ageing parent, plus the aunt who visits on Tuesdays. The buyer is the sibling who has
+become the family's unpaid care coordinator; the users are everyone in the group, including
+the ones who will never install another app.
+
+## The value
+
+- **Zero behaviour change.** The family keeps talking where they already talk. The record is
+  a by-product of messages they were sending anyway — no app to install, no forms to fill.
+- **Answers that are otherwise lost.** "When did the swelling start?" is a scroll through the
+  timeline, not an argument about memory. Every entry cites its source messages as evidence.
+- **A record worth handing over.** GP visits, respite carers, memory-clinic assessments and
+  Attendance Allowance forms all ask for exactly the history Penny has been keeping.
+- **Trust by construction.** One shared family login, evidence links on every entry, spend
+  caps per household, and a bot that is contractually silent unless spoken to.
+
+## How it works
 
 ```
-backend/           FastAPI app (Python 3.12+), managed with uv
-  app/             config, OpenAI client, routers
-  tests/           pytest; `live` and `db` markers opt in to external deps
-frontend/          React + TypeScript, built with Vite
-infra/             provision.py — the whole deployment, as one idempotent script
-docs/              API contract, deployment, GOWA runbook
+family WhatsApp group
+        │  messages, photos, voice notes
+        ▼
+   gowa (WhatsApp bridge, go-whatsapp-web-multidevice)
+        │  signed webhooks, private networking
+        ▼
+   penny (FastAPI + Postgres) ──► OpenAI: extraction, transcription, reports
+        │  serves frontend/dist same-origin
+        ▼
+   React SPA — landing page, timeline, reports, settings
 ```
 
-Two deployed services plus Postgres: `penny` (FastAPI, which also serves `frontend/dist` so the app is
-same-origin) and `gowa` (the WhatsApp bridge). See [docs/railway-deployment.md](docs/railway-deployment.md).
+- **One origin, two services.** FastAPI serves the built React app alongside `/api/*`, which
+  deletes CORS, third-party-cookie and CSRF problems outright. The WhatsApp bridge (`gowa`)
+  is a sidecar reached only over private networking; a third `tick` container calls one
+  authenticated endpoint hourly for scheduled work.
+- **Extraction with guardrails.** Messages are batched to a pinned, dated OpenAI model
+  snapshot under strict JSON schemas; every event stores which messages it came from. Voice
+  notes are transcribed; photos are filed with the entry they belong to. Per-import and
+  per-household monthly spend caps are enforced in code.
+- **Onboarding as a webhook.** A group-join event provisions the household, generates
+  credentials, and posts the welcome message — with the password warning, the context
+  questions that seed extraction quality, and the one rule about when Penny speaks.
+- **Reproducible deployment.** `infra/provision.py` builds the entire Railway deployment —
+  project, Postgres, services, volume, secrets, domain — idempotently from this repo. An
+  OpenAI key and a domain are the only inputs a human brings.
 
-## Environment
+Pre-product, deliberately: a demoable vertical slice for 1–5 test families, optimised for
+correctness and auditability over scale.
+
+## Repository layout
+
+```
+backend/           FastAPI app (Python 3.12+, uv); pytest with `live` and `db` opt-in markers
+frontend/          React + TypeScript SPA (Vite)
+infra/             provision.py — the whole deployment as one idempotent script
+docs/              architecture, API contract, deployment runbook, GOWA runbook
+```
+
+## Run it locally
 
 ```sh
-cp .env.example .env   # then fill in your real keys
+cp .env.example .env        # every variable documented inline; OPENAI_API_KEY is the only real key
+
+cd backend && uv sync && uv run uvicorn app.main:app --reload    # http://localhost:8000
+cd frontend && npm install && npm run dev                        # http://localhost:5173, proxies /api
 ```
 
-`.env` is gitignored — only `.env.example` is committed. The backend reads it via
-`app.config.get_settings()`, from the repo root or from `backend/`.
+No backend handy? `VITE_USE_FIXTURES=true npm run dev` serves the whole UI from hand-authored
+demo data, clearly bannered as such.
 
-| Variable | Required | Default | Purpose |
-| --- | --- | --- | --- |
-| `ENV` | no | `dev` | `dev` \| `test` \| `production`. Anything but `production` enables the dev-only CORS middleware |
-| `OPENAI_API_KEY` | yes | — | OpenAI auth; without it `get_openai_client()` raises |
-| `OPENAI_BASE_URL` | no | — | Override the API base for proxies/gateways |
-| `LLM_MODEL_EXTRACT` | no | `gpt-5.5-2026-04-23` | Extraction model. Dated snapshot, never the floating alias |
-| `LLM_MODEL_REPORT` | no | `gpt-5.5-2026-04-23` | Report model |
-| `DATABASE_URL` | in deploy | — | Postgres. `postgres://` / `postgresql://` are rewritten to `postgresql+asyncpg://` for you |
-| `PENNY_TEST_DATABASE_URL` | no | — | Postgres URL for the `db`-marked tests; they skip when unset |
-| `SESSION_SECRET` | in deploy | — | Signs the HttpOnly cookie carrying `household_id` |
-| `SESSION_MAX_AGE_DAYS` | no | `30` | Session cookie lifetime |
-| `GOWA_URL` | M6 | — | Private URL of the WhatsApp sidecar, e.g. `http://gowa.railway.internal:3000` |
-| `GOWA_BASIC_AUTH` | M6 | — | `user:pass` for calling GOWA; must match its `APP_BASIC_AUTH` |
-| `WHATSAPP_WEBHOOK_SECRET` | M6 | — | HMAC-SHA256 key for inbound webhooks; must match GOWA's |
-| `INTERNAL_TICK_SECRET` | yes | — | Shared secret for the `tick` service that calls `/api/internal/tick` hourly; must match on both services |
-| `IMPORT_MAX_SPEND_USD` | no | `25` | Hard ceiling per import; aborts mid-flight and resumes later |
-| `LLM_MONTHLY_BUDGET_USD_PER_HOUSEHOLD` | no | `15` | Per-household monthly spend guard |
-| `DEFAULT_TIMEZONE` | no | `Europe/London` | Default household timezone |
-| `SERVE_FRONTEND` | no | `true` | Mount `frontend/dist` from the API process (how production serves the SPA) |
-| `ONBOARDING_ENABLED` | no | `true` | Adding Penny to a WhatsApp group provisions that group's household and posts the credentials into the group. `false` restores the old silent 200 — the kill switch if the number gets out |
-| `ONBOARDING_MAX_HOUSEHOLDS` | no | `25` | Ceiling on onboarding. The exposure is the OpenAI bill, not data: every household runs extraction |
-| `APP_PUBLIC_URL` | no | `https://pennyai.chat` | The URL in the welcome message. Wrong value = a dead link in the first thing a family ever sees |
-
-Test-only, read by the suite rather than by `Settings`: `RUN_LIVE_OPENAI_TESTS=1` opts in to the
-`live` tests.
-
-The model ids default to a **dated snapshot** rather than the floating alias, because a silent model
-swap changes extraction quality with no diff to point at — and because the call conventions are
-version-specific: `reasoning.effort` ∈ `{none,low,medium,high,xhigh}`, `max_output_tokens`, and never
-`temperature` / `top_p` / `max_tokens`.
-
-Which of these each deployed service needs is documented per-service in
-[docs/railway-deployment.md](docs/railway-deployment.md).
-
-Use the client from request handlers:
-
-```python
-from app.openai_client import get_openai_client
-
-client = get_openai_client()  # cached AsyncOpenAI instance
-```
-
-`GET /api/ai/status` reports whether the key is configured (it never returns the key).
-
-## Backend
-
-```sh
-cd backend
-uv sync
-uv run uvicorn app.main:app --reload
-```
-
-The API runs at http://localhost:8000 (health check: `GET /api/health`).
-
-## Frontend
-
-```sh
-cd frontend
-npm install
-npm run dev
-```
-
-The dev server runs at http://localhost:5173 and proxies `/api` to the backend, matching the
-same-origin arrangement in production. Checks:
-
-```sh
-npm run build       # tsc -b && vite build
-npm run lint        # oxlint
-```
-
-## Tests
-
-```sh
-cd backend
-uv run pytest                     # default: live and db tests skip
-```
-
-Two markers gate the tests that need something external. Both skip silently when their variable is
-unset, so a clean checkout stays runnable:
-
-```sh
-RUN_LIVE_OPENAI_TESTS=1 uv run pytest -m live      # hits the real OpenAI API; costs a fraction of a cent
-PENNY_TEST_DATABASE_URL=postgresql+asyncpg://... uv run pytest -m db
-```
-
-CI runs `pytest -m "not live"` plus the frontend build on every PR.
+Tests: `cd backend && uv run pytest` (684 tests; `live` and `db` markers skip unless opted in)
+and `cd frontend && npx vitest run`. CI runs both plus the production build on every PR.
 
 ## Deploying
-
-The deployment is reproducible from this repository. One idempotent script builds all of it — the
-project, Postgres, both services, the volume, every generated secret and the domain:
 
 ```sh
 export OPENAI_API_KEY=sk-...
@@ -129,22 +109,14 @@ infra/provision.py --workspace <workspace-id> --domain penny.example.com --dry-r
 infra/provision.py --workspace <workspace-id> --domain penny.example.com
 ```
 
-An OpenAI key and a domain are the only two values a teammate has to bring. Everything else is
-generated per environment, derived from the project's topology, or a default in
-`backend/app/config.py` that is deliberately **not** set on Railway.
-
-Re-running converges: nothing is duplicated and no existing secret is rotated. `--self-test` proves
-the invariants offline, `--dry-run` shows every mutation before it happens.
-
-Full runbook — prerequisites, the steps only a human can do, how to verify, how to roll back, the
-kill switch, and the fourteen platform traps that cost a night — in
-[docs/deployment.md](docs/deployment.md).
+Re-running converges: nothing duplicates, no secret rotates. The full runbook — including the
+fourteen platform traps that cost a night — is in [docs/deployment.md](docs/deployment.md).
 
 ## Docs
 
-- [docs/deployment.md](docs/deployment.md) — the deployment runbook: provisioning, verification, rollback, traps
-- [infra/variables.md](infra/variables.md) — every variable, classified, and why it is allowed to exist
 - [docs/architecture.md](docs/architecture.md) — end-to-end system and deployment architecture
 - [docs/api-contract.md](docs/api-contract.md) — the HTTP contract the frontend types are generated from
-- [docs/railway-deployment.md](docs/railway-deployment.md) — service topology, variables, and the platform gotchas
+- [docs/deployment.md](docs/deployment.md) — provisioning, verification, rollback, the kill switch
+- [docs/railway-deployment.md](docs/railway-deployment.md) — service topology, variables, platform gotchas
 - [docs/gowa-runbook.md](docs/gowa-runbook.md) — pairing a WhatsApp account; needs a physical phone
+- [infra/variables.md](infra/variables.md) — every variable, classified, and why it is allowed to exist
