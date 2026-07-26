@@ -222,6 +222,24 @@ def _tighten(node: Any) -> None:
     # Strict mode forbids `default` and requires every property to be listed in `required`
     # — optionality is expressed as anyOf[T, null], never by omission.
     node.pop("default", None)
+    # A `$ref` MUST BE ALONE. Strict mode rejects any sibling keyword beside it:
+    #
+    #   Invalid schema for response_format 'InterviewResult':
+    #   context=('properties', 'profile'), $ref cannot have keywords {'description'}
+    #
+    # Pydantic emits exactly that whenever a field whose type is another model also carries a
+    # docstring or a Field(description=...) — the description lands next to the `$ref` rather
+    # than inside the definition it points at. This reached production: the onboarding interview
+    # is the first structured output with a nested model field, so it was the first call that
+    # could not be built, and the failure surfaced in a family's chat as Penny saying nothing.
+    #
+    # Dropped rather than relocated. Moving it into the shared `$defs` entry would attach one
+    # field's wording to every use of that model, which is worse than losing a sentence the
+    # instructions already carry.
+    if "$ref" in node:
+        for sibling in [key for key in node if key != "$ref"]:
+            node.pop(sibling)
+        return
     if node.get("type") == "object":
         node["additionalProperties"] = False
         node["required"] = list(node.get("properties", {}))

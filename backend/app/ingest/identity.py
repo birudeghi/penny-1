@@ -35,11 +35,13 @@ from __future__ import annotations
 
 import logging
 import unicodedata
+from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
+from sqlalchemy.exc import IntegrityError
 
 from app.models import Member
 
@@ -225,39 +227,81 @@ async def resolve_senders(
 
     Creates the members it has to, fills in identifiers it can, and flushes — the seam needs
     real ids for `messages.member_id` and for the content hash. It does NOT commit.
+
+    READ-THEN-INSERT IS A RACE, AND IT LOST IN PRODUCTION. Two GOWA deliveries of the same
+    message arrived 6ms apart, both read a household with no members, both built the same
+    provisional row, and the second flush hit `uq_members_household_wa_jid` — a 500 out of the
+    webhook path, which is the one thing that path must never do. GOWA reads any non-2xx as a
+    failure and retries five times, so an unlucky burst can turn one message into five.
+
+    The retry below is the whole fix: the loser re-reads inside a savepoint, finds the row the
+    winner just wrote, and matches it instead of creating it. One retry is enough because the
+    second read happens after the winner's INSERT is visible — there is no third outcome.
     """
     distinct = {i for i in identities if not i.is_empty}
     resolution = IdentityResolution()
     if not distinct:
         return resolution
 
-    existing = (
-        await session.execute(sa.select(Member).where(Member.household_id == household_id))
-    ).scalars()
-    index = _MemberIndex(list(existing))
-
-    created: list[Member] = []
-    # Sorted for determinism: two runs over the same export must create members in the same
-    # order, or a re-import produces differently-ordered `new_member_ids` for no reason.
-    for identity in sorted(
-        distinct, key=lambda i: (i.wa_jid or "", i.wa_lid or "", i.display_name or "")
-    ):
-        member = _match(identity, index)
-        if member is None:
-            member = _provisional(household_id, identity, index)
-            session.add(member)
-            index.add(member)
-            created.append(member)
-            resolution.new_member_ids.append(member.id)
-        else:
-            _fill_in(member, identity, index)
-        resolution.member_ids[identity] = member.id
-
-    # Flush, not commit: the seam is about to insert messages that FK to these rows.
-    await session.flush()
-    if created:
-        log.info(
-            "members_provisioned",
-            extra={"household_id": str(household_id), "count": len(created)},
-        )
+    for attempt in (1, 2):
+        resolution = IdentityResolution()
+        try:
+            # A SAVEPOINT, so a collision rolls back only the member INSERTs. The seam has not
+            # written anything yet at this point, so there is nothing else to lose.
+            async with session.begin_nested():
+                created = await _resolve_into(session, household_id, distinct, resolution)
+                await session.flush()
+        except IntegrityError:
+            if attempt == 2:
+                raise
+            log.info(
+                "members_raced",
+                extra={"household_id": str(household_id), "senders": len(distinct)},
+            )
+            # `expire_all` and not a bare retry: the losing session still holds the members it
+            # read BEFORE the winner committed, and matching against that stale index would
+            # build the very row that just collided.
+            session.expire_all()
+            continue
+        if created:
+            log.info(
+                "members_provisioned",
+                extra={"household_id": str(household_id), "count": len(created)},
+            )
+        return resolution
     return resolution
+
+
+def _resolve_into(
+    session: AsyncSession,
+    household_id: UUID,
+    distinct: set[SenderIdentity],
+    resolution: IdentityResolution,
+) -> Awaitable[list[Member]]:
+    """One matching pass. Separated so `resolve_senders` can run it twice under a savepoint."""
+
+    async def run() -> list[Member]:
+        existing = (
+            await session.execute(sa.select(Member).where(Member.household_id == household_id))
+        ).scalars()
+        index = _MemberIndex(list(existing))
+
+        created: list[Member] = []
+        # Sorted for determinism: two runs over the same export must create members in the same
+        # order, or a re-import produces differently-ordered `new_member_ids` for no reason.
+        for identity in sorted(
+            distinct, key=lambda i: (i.wa_jid or "", i.wa_lid or "", i.display_name or "")
+        ):
+            member = _match(identity, index)
+            if member is None:
+                member = _provisional(household_id, identity, index)
+                session.add(member)
+                index.add(member)
+                created.append(member)
+                resolution.new_member_ids.append(member.id)
+            else:
+                _fill_in(member, identity, index)
+            resolution.member_ids[identity] = member.id
+        return created
+
+    return run()

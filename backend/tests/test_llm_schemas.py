@@ -220,3 +220,40 @@ def test_merge_prompt_forbids_losing_information() -> None:
 
 
 # --- the care brief's version -------------------------------------------------------------
+
+
+def test_a_ref_is_emitted_alone_because_strict_mode_rejects_any_sibling() -> None:
+    """REGRESSION, from production. `$ref cannot have keywords {'description'}`.
+
+    Pydantic puts a field's description NEXT TO the `$ref` when the field's type is another
+    model, and OpenAI strict mode rejects the whole request for it:
+
+        Invalid schema for response_format 'InterviewResult':
+        context=('properties', 'profile'), $ref cannot have keywords {'description'}
+
+    The onboarding interview was the first structured output with a nested model field, so it
+    was the first call that could not be built at all. Nothing was recorded in `llm_runs` — the
+    request never left — and the interview's own "silence is the safe failure" rule meant the
+    family saw Penny ignore them.
+    """
+    from pydantic import BaseModel, Field
+
+    from app.llm.schemas import to_strict_json_schema
+
+    class Inner(BaseModel):
+        value: str
+
+    class Outer(BaseModel):
+        """A model whose nested field carries a description."""
+
+        nested: Inner = Field(description="the description that used to break the request")
+        plain: str
+
+    schema = to_strict_json_schema(Outer)
+    ref_node = schema["properties"]["nested"]
+
+    assert set(ref_node) == {"$ref"}, f"a $ref must be alone, got {sorted(ref_node)}"
+    # The rest of the tightening still has to happen inside the definition it points at.
+    definition = schema["$defs"]["Inner"]
+    assert definition["additionalProperties"] is False
+    assert definition["required"] == ["value"]
