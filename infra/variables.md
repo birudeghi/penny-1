@@ -1,6 +1,6 @@
 # Variable manifest
 
-Every environment variable the two deployed services need, and — for each one — why it is allowed
+Every environment variable the three deployed services need, and — for each one — why it is allowed
 to exist. This is the authoritative list: if a variable is not below, it must not be set on Railway.
 
 Four classes, and the class is the whole argument:
@@ -30,7 +30,7 @@ provisioner ever tries to write one.
 | `SESSION_SECRET` | **SECRET** | `token_hex(32)` | Signs the HttpOnly cookie carrying `household_id`. **Rotating it logs every household out.** Required in production: `startup_checks` refuses to boot without it, below 32 chars, or on any literal published in `.env.example`. |
 | `WHATSAPP_WEBHOOK_SECRET` | **SECRET** | `token_hex(32)` | HMAC-SHA256 key for `X-Hub-Signature-256`. **Must equal `WHATSAPP_WEBHOOK_SECRET` on `gowa`.** If they differ, penny rejects every inbound message and ingest silently stops. GOWA's shipped default is the literal `secret`. |
 | `GOWA_BASIC_AUTH` | **SECRET** | `penny:<token_hex(32)>` | Credentials for calling the sidecar. **Must equal `APP_BASIC_AUTH` on `gowa`.** Exactly one `:`, and no `,` — GOWA `Fatalln`s on anything else. Hex satisfies both by construction. |
-| `INTERNAL_TICK_SECRET` | **SECRET** | `token_hex(32)` | Shared secret for whatever calls `POST /api/internal/tick`. Generated now so the cron service has something to match when it lands. |
+| `INTERNAL_TICK_SECRET` | **SECRET** | `token_hex(32)` | Shared secret for `POST /api/internal/tick`. **Must equal `INTERNAL_TICK_SECRET` on `tick`.** If they differ every tick 401s, which is indistinguishable from a healthy quiet hour while households that have gone quiet stop being drained. |
 | `ENV` | INFRA | `production` | Turns off the dev-only CORS middleware (production is same-origin and needs none) and makes the startup secret checks fatal rather than advisory. |
 | `PORT` | INFRA | `8000` | Set by hand because `${{penny.PORT}}` does **not** auto-resolve, and because gowa's webhook URL hardcodes `:8000`. |
 | `DATABASE_URL` | INFRA | `${{Postgres.DATABASE_URL}}` | A reference, stored literally. `Settings` rewrites `postgres://` / `postgresql://` to `postgresql+asyncpg://` on the way in — which is why penny can use this directly and gowa cannot. |
@@ -62,6 +62,21 @@ python -c "import secrets; print(secrets.token_hex(32))"
 `gowa` also needs a volume at `/app/storages` for `chatstorage.db`, which is unconditionally SQLite
 on local disk. The whatsmeow **session** is the thing that costs a physical-phone re-pair, and it
 lives in Postgres via `DB_URI`, not on the volume.
+
+## `tick` (the scheduled caller, `curlimages/curl:8.11.1`)
+
+| Variable | Class | Value | Notes |
+|---|---|---|---|
+| `INTERNAL_TICK_SECRET` | **SECRET** | same as penny's | Sent as `X-Penny-Tick-Secret`. Both sides or neither: penny answers 401 to a mismatch, and a 401 looks exactly like a cron with nothing to say while quiet households silently stop being drained. |
+| `RAILWAY_RUN_COMMAND` | INFRA | `sh -c 'while true; do curl … ; sleep 3600; done'` | The schedule, in the repository. **`sh -c` is load-bearing**: Railway runs a start command without a shell, so `$INTERNAL_TICK_SECRET` would reach curl as 21 literal characters. **The sleep is too**: a service that exits is restarted, so a one-shot `curl` here would be a hot loop against an endpoint that spends money at OpenAI. Composed by `tick_command()` in `infra/provision.py`; `--self-test` asserts both properties. |
+
+This is the one service whose start command the provisioner cannot prove it set — the CLI verified
+at 5.27.0 has no flag for it, so `RAILWAY_RUN_COMMAND` is the mechanism reached for instead. It
+fails safely: if Railway ignores it the image's entrypoint is `curl` with no arguments, so the
+service crash-loops visibly and ticks nothing. `provision.py` prints the exact command to paste
+into the dashboard for that case.
+
+`tick` gets no domain and no volume. It holds nothing and talks to `penny` over private networking.
 
 ## Injected by Railway — set none of these
 

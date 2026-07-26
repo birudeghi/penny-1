@@ -65,9 +65,13 @@ class _SpyRunner:
 
     def __init__(self) -> None:
         self.calls: list[list[ChunkMessage]] = []
+        # The `already_extracted` overlap each call was handed. Only interesting once a run can
+        # stop mid-conversation: it is what keeps the next batch's first chunk readable.
+        self.contexts: list[list[ChunkMessage]] = []
 
     async def __call__(self, pending: list[ChunkMessage], **kwargs: Any) -> ExtractionRunResult:
         self.calls.append(list(pending))
+        self.contexts.append(list(kwargs.get("already_extracted") or []))
         # Report everything as extracted so `persist_extraction` stamps it, which is what a
         # real successful run does and what makes the "second run has nothing to do" case real.
         return ExtractionRunResult(extracted_message_ids=[m.id for m in pending])
@@ -333,7 +337,85 @@ async def test_system_lines_cannot_push_a_household_over_the_threshold(
     assert (summary.deferred, summary.messages_pending) == (True, 39)
 
 
-# --- the work list the hourly tick is meant to run ------------------------------------
+# --- the bounded batch, and draining a backlog across runs ----------------------------
+#
+# The cursor is `extracted_at IS NULL`, and a care profile change clears that column for the
+# WHOLE household — so the query behind a run is not always "the last few messages", it is
+# sometimes six months of chat. `extract_max_batch_messages` bounds what one run pulls into
+# memory, which only works if the leftovers reliably come back: a cap that dropped messages, or
+# reordered them, or told the caller it had finished, would be worse than no cap at all.
+
+
+@pytest.mark.db
+async def test_a_run_reads_at_most_one_batch_and_says_there_is_more(
+    session: AsyncSession, runner: _SpyRunner, cadence: Callable[..., Settings]
+) -> None:
+    """The bound, and the flag that stops it becoming silent data loss.
+
+    A run that quietly extracts a quarter of a backlog and returns `ran=True` looks exactly like
+    a run that finished — which is how an import reports itself complete with most of a family's
+    history unread. `more_pending` is what the import job and the tick read to know better.
+    """
+    cadence(extract_max_batch_messages=25)
+    household = await make_household(session)
+    await ingest(session, household, 60, minutes_ago=7 * 60)
+
+    summary = await run_extraction_for_household(session, household.id)
+
+    assert runner.batch_sizes == [25]
+    assert (summary.ran, summary.more_pending) == (True, True)
+    assert (summary.messages_pending, summary.messages_considered) == (25, 25)
+    assert await unextracted_count(session, household) == 35
+
+
+@pytest.mark.db
+async def test_repeated_runs_drain_the_whole_backlog_oldest_first_and_then_stop(
+    session: AsyncSession, runner: _SpyRunner, cadence: Callable[..., Settings]
+) -> None:
+    """The other half of the bound: everything the cap held back is extracted, exactly once.
+
+    THE ORDER IS THE ASSERTION. The cap takes a prefix of the same ordering the chunker sorts
+    into (`sent_at`, `source_ordinal`, `id`), so each batch is a contiguous run of conversation
+    rather than a scattering of it — a batch that interleaved two days would hand the model a
+    thread with its middle missing and cost real events. And the run after the last one is free:
+    the cursor is empty, nothing is sent, and `more_pending` is finally False.
+    """
+    cadence(extract_max_batch_messages=25)
+    household = await make_household(session)
+    messages = await ingest(session, household, 60, minutes_ago=7 * 60)
+
+    summaries = [await run_extraction_for_household(session, household.id) for _ in range(4)]
+
+    assert runner.batch_sizes == [25, 25, 10]
+    assert [s.more_pending for s in summaries] == [True, True, False, False]
+    extracted_in_order = [m.id for call in runner.calls for m in call]
+    assert extracted_in_order == [m.id for m in messages]
+    assert await unextracted_count(session, household) == 0
+
+
+@pytest.mark.db
+async def test_a_capped_batch_still_reaches_the_model_as_one_conversation(
+    session: AsyncSession, runner: _SpyRunner, cadence: Callable[..., Settings]
+) -> None:
+    """A cut mid-thread must not orphan a pronoun from its antecedent.
+
+    The second batch opens where the first stopped, so its first chunk is handed the tail of the
+    already-extracted messages as `context_only` — "she's still dizzy" keeps whatever gave it a
+    "she". That context is READ and never citable, so the overlap cannot double-bill an event.
+    """
+    cadence(extract_max_batch_messages=25)
+    household = await make_household(session)
+    messages = await ingest(session, household, 40, minutes_ago=7 * 60)
+
+    await run_extraction_for_household(session, household.id)
+    await run_extraction_for_household(session, household.id)
+
+    context = runner.contexts[1]
+    assert context, "the second batch was given no context at all"
+    assert [m.id for m in context] == [m.id for m in messages[25 - len(context) : 25]]
+
+
+# --- the work list the hourly tick runs ------------------------------------------------
 
 
 @pytest.mark.db
@@ -343,9 +425,9 @@ async def test_households_due_for_extraction_matches_the_gate(
     """The tick's query and the per-call gate must agree, or the tick wakes households up to
     do nothing (and pays for the wake-up) or leaves the quiet ones stranded forever.
 
-    NOTE: nothing calls this in production yet — `POST /api/internal/tick` is specified in
-    `docs/api-contract.md` and unimplemented. Until it exists, a group that goes quiet below
-    the count threshold waits for its next message rather than for the age trigger.
+    `POST /api/internal/tick` (`app.routers.internal`) is the only caller: it loops over exactly
+    these ids, one session and one transaction each. `tests/test_tick.py` covers the loop's own
+    behaviour; what is asserted here is that the list it loops over is the right list.
     """
     cadence()
     over_count = await make_household(session)

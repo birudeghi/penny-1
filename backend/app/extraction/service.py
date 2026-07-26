@@ -39,10 +39,16 @@ and the cost of forgetting is a bill, discovered a month late. Callers that must
 THE AGE HALF OF THE GATE NEEDS SOMETHING TO FIRE IT. Both halves are evaluated when a caller
 arrives, so on a chatty group the age trigger fires on the next inbound message. On a group that
 has gone quiet there is no next message, and the last few messages of the conversation would sit
-unextracted forever. `households_due_for_extraction` is the query the hourly
-`POST /api/internal/tick` is meant to run to close that hole. THAT ENDPOINT DOES NOT EXIST YET
-(documented in `docs/api-contract.md`, no router implements it); until it does, a quiet group's
-tail waits for its next message.
+unextracted forever. `households_due_for_extraction` is the query that closes that hole and
+`POST /api/internal/tick` (`app.routers.internal`) is what runs it, hourly.
+
+ONE CALL IS ONE BOUNDED BATCH. `_unextracted` reads at most `extract_max_batch_messages` rows,
+because "everything not yet extracted" is not always a handful of messages: a care profile change
+clears `extracted_at` for the entire household, and the unbounded form of that query is six
+months of chat in one list in one process. What the cap leaves behind keeps `extracted_at IS
+NULL`, so the next call resumes exactly there — the same resumability the spend ceiling relies
+on. `RunSummary.more_pending` is how a caller learns it happened, because a run that quietly did
+less than it was asked for is how an import reports itself complete with half a feed.
 
 A VOICE NOTE IS HELD BACK UNTIL IT HAS BEEN TRANSCRIBED, OR UNTIL WE GIVE UP ON IT. That rule
 lives in `_unextracted`, for exactly the reason the cadence gate lives here: it has to hold for
@@ -140,8 +146,16 @@ class RunSummary:
     # A caller that must not wait (the import flow) distinguishes them by this flag.
     deferred: bool = False
     # The unextracted backlog this call saw, whether or not it extracted any of it. This is
-    # the number the gate compared against `extract_min_unextracted`.
+    # the number the gate compared against `extract_min_unextracted`. Capped by
+    # `extract_max_batch_messages`, so it is "what this run could see", not "what exists".
     messages_pending: int = 0
+    # `extract_max_batch_messages` truncated the cursor: there is more waiting the moment this
+    # transaction commits. NOT an error and NOT an abort — the run did exactly what it was asked
+    # — but the caller is the only one who can decide what to do about it. The import job comes
+    # straight round again, because a family is watching a progress bar; the tick leaves it for
+    # the next hour, because nobody is. A caller that ignores this reports a partial run as a
+    # finished one, which is the failure the flag exists to make impossible to miss.
+    more_pending: bool = False
     messages_considered: int = 0
     events_inserted: int = 0
     events_updated: int = 0
@@ -188,6 +202,12 @@ async def run_extraction_for_household(
     if not pending:
         return RunSummary(household_id=household_id, ran=True, messages_stamped=inert)
 
+    # A full batch means the cursor was cut, not that the backlog happens to end here. The one
+    # false positive — a backlog of exactly `extract_max_batch_messages` — costs the next caller
+    # one query that finds nothing, which is cheaper than either alternative: counting the whole
+    # backlog on every run, or a caller believing a truncated run finished the household.
+    more_pending = len(pending) >= get_settings().extract_max_batch_messages
+
     decision = cadence_decision(pending, force=force)
     if not decision.extract:
         log.info(
@@ -203,6 +223,7 @@ async def run_extraction_for_household(
             deferred=True,
             messages_pending=decision.pending,
             messages_stamped=inert,
+            more_pending=more_pending,
         )
 
     tz = ZoneInfo(household.timezone)
@@ -229,6 +250,7 @@ async def run_extraction_for_household(
         household_id=household_id,
         ran=True,
         messages_pending=len(pending),
+        more_pending=more_pending,
         messages_considered=len(pending),
         events_inserted=persisted.inserted,
         events_updated=persisted.updated,
@@ -307,11 +329,13 @@ def cadence_decision(
 async def households_due_for_extraction(session: AsyncSession) -> list[UUID]:
     """Households the cadence gate would let through right now. The hourly tick's work list.
 
-    NOTHING CALLS THIS YET. `POST /api/internal/tick` is specified in `docs/api-contract.md`
-    and is not implemented, so the age trigger currently only fires when a household receives
-    another message. This query is the whole of the tick's decision; the endpoint that runs it
+    `POST /api/internal/tick` (`app.routers.internal`) runs this and nothing else: the endpoint
     is a loop over these ids, each in its own session and its own transaction, because one
-    household's failure must not roll back the rest.
+    household's failure must not roll back the rest. The decision stays HERE rather than in the
+    router for the same reason the cadence gate lives in this module — a threshold that exists
+    in two places is a threshold that disagrees with itself, and the tick would then either wake
+    households up to do nothing (paying the fixed prompt overhead for the privilege) or leave
+    the quiet ones stranded, which is the bug it exists to fix.
 
     The same two thresholds as `cadence_decision`, evaluated in Postgres over every household
     at once. System messages are excluded on both sides so they can neither reach the count
@@ -387,12 +411,28 @@ async def _stamp_inert(session: AsyncSession, household_id: UUID) -> int:
 
 
 async def _unextracted(session: AsyncSession, household_id: UUID) -> list[ChunkMessage]:
-    """The cursor. System lines are excluded here rather than dropped later.
+    """The cursor, capped at `extract_max_batch_messages`. Oldest first, always.
 
-    A join notice or the encryption banner is a group event, not conversation, and paying a
-    model to read it finds nothing — but it must still get `extracted_at` stamped, or the
-    "unextracted" count never reaches zero and every subsequent run rebuilds the same chunk.
-    That stamping happens in `_stamp_inert`, below, not by pretending they were extracted.
+    THE CAP IS NOT A PAGINATION DETAIL. Read the query as "everything this household has not had
+    extracted yet" and the bound looks unnecessary, because the live path only ever finds tens of
+    messages there. The case that is not the live path is a care profile change: it clears
+    `extracted_at` for the WHOLE household on purpose, so the very next call selects six months
+    of chat into one Python list, chunks all of it, and holds the household's advisory lock for
+    the duration. One family's re-extraction should not be able to decide how much memory a
+    container serving every other family has.
+
+    So the run takes the OLDEST slice and stops. The `ORDER BY` is what makes that sound rather
+    than arbitrary — it is the same order the chunker sorts into (`sent_at`, `source_ordinal`,
+    `id`), so a batch is a contiguous prefix of the conversation and never an interleaving of two
+    days. The next run picks up at the row after it, and its first chunk gets the tail of what
+    this one extracted as `context_only` via `_context_before` — which is exactly the mechanism
+    that stops a cut mid-thread orphaning "she's still dizzy" from its antecedent.
+
+    System lines are excluded here rather than dropped later. A join notice or the encryption
+    banner is a group event, not conversation, and paying a model to read it finds nothing — but
+    it must still get `extracted_at` stamped, or the "unextracted" count never reaches zero and
+    every subsequent run rebuilds the same chunk. That stamping happens in `_stamp_inert`, above,
+    not by pretending they were extracted.
 
     A voice note whose transcript is still being fetched is excluded too, and NOT stamped: it is
     coming back, in seconds, with words in it. `_awaiting_transcription` is the whole ordering
@@ -418,6 +458,7 @@ async def _unextracted(session: AsyncSession, household_id: UUID) -> list[ChunkM
                 sa.not_(_awaiting_transcription()),
             )
             .order_by(Message.sent_at, Message.source_ordinal, Message.id)
+            .limit(get_settings().extract_max_batch_messages)
         )
     ).all()
     return [_as_chunk_message(row) for row in rows]

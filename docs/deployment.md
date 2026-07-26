@@ -49,8 +49,9 @@ infra/provision.py --workspace <workspace-id> --domain penny.example.com
 `ps` and lands in shell history.
 
 That one command creates the project, the Postgres addon, the `gowa` service with its image, its
-variables and its volume, the `penny` service, every generated secret, the domain, and the GitHub
-source connection. What it prints at the end is the list of things a script cannot do for you.
+variables and its volume, the `penny` service, the `tick` service that calls
+`POST /api/internal/tick` every hour, every generated secret, the domain, and the GitHub source
+connection. What it prints at the end is the list of things a script cannot do for you.
 
 It is **idempotent**. Run it again after a change, or when you are not sure what state something is
 in; it converges rather than duplicating. Specifically:
@@ -58,8 +59,9 @@ in; it converges rather than duplicating. Specifically:
 - Project, services, volume and domain are created only when absent.
 - Generated secrets are minted only when the key is missing on the service. A second run does not
   reissue `SESSION_SECRET` — that would log every household out.
-- `WHATSAPP_WEBHOOK_SECRET` / `GOWA_BASIC_AUTH` are written to **both** services from one value. If
-  the two sides are ever found disagreeing, it says so loudly and converges gowa onto penny's value.
+- `WHATSAPP_WEBHOOK_SECRET` / `GOWA_BASIC_AUTH` / `INTERNAL_TICK_SECRET` are written to **every**
+  service that needs them from one value. If two sides are ever found disagreeing, it says so loudly
+  and converges them onto penny's value — penny is the side the application reads.
 - Literal infra values (`ENV`, `PORT`, `GOWA_URL`, `APP_HOST`, …) are enforced: drift is reset.
 - `${{Postgres.…}}` references are written only when absent, because Railway reports them *resolved*
   and a comparison against the literal would rewrite them on every run.
@@ -98,6 +100,12 @@ them.
 3. **Set an OpenAI spend cap** at platform.openai.com/settings/organization/limits. This is the one
    guard no bug in this repository can bypass. `IMPORT_MAX_SPEND_USD` and
    `LLM_MONTHLY_BUDGET_USD_PER_HOUSEHOLD` are the in-app guards; they are code, and code has bugs.
+4. **Confirm the `tick` service is looping** — `railway logs --service tick` should show one POST an
+   hour and nothing else. If it is *restarting*, Railway ignored `RAILWAY_RUN_COMMAND`; paste the
+   command the script printed into the service's start command by hand. This is the one thing in the
+   deployment that the provisioner cannot prove it set (the CLI verified at 5.27.0 has no flag for
+   it), and until it ticks, a household that goes quiet never finishes extracting and a care-profile
+   re-extraction never drains. See [`infra/variables.md`](../infra/variables.md#tick-the-scheduled-caller-curlimagescurl8111).
 
 ## 4. Verify
 

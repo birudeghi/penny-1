@@ -34,12 +34,13 @@ The plan lists this as **open question #1**, to be settled empirically during M1
 
 ## Topology
 
-Two services plus Postgres in one Railway project. Only `penny` gets a permanent public domain.
+Three services plus Postgres in one Railway project. Only `penny` gets a permanent public domain.
 
 | Service | Source | Public domain | Notes |
 |---|---|---|---|
 | `penny` | repo, root `/` | **Yes** | Root `Dockerfile`: builds `frontend/dist`, FastAPI serves it same-origin alongside `/api/*` |
 | `gowa` | Docker image, pinned tag | **No** — temporarily yes, once, to pair | WhatsApp bridge + small volume |
+| `tick` | Docker image, pinned tag | **No** | `curl` in a loop: one authenticated `POST /api/internal/tick` an hour, over private networking |
 | `Postgres` | Railway template | No | Penny's data *and* GOWA's whatsmeow session |
 
 Wiring:
@@ -48,9 +49,18 @@ Wiring:
 - `penny` → `${{Postgres.DATABASE_URL}}` and `http://gowa.railway.internal:3000`
 - `gowa` → `${{Postgres.PG*}}`, hand-composed (see below — you cannot use `DATABASE_URL`)
 
-No worker service: user-triggered work runs in FastAPI `BackgroundTasks`. The plan's M5 adds a
-scheduled `POST /api/internal/tick` described as a "Railway cron service"; the source notes cover no
-cron behaviour at all, so **how cron is configured on Railway is unverified here** — settle it in M5.
+No worker service: user-triggered work runs in FastAPI `BackgroundTasks`. Scheduled work is one
+HTTP call — `POST /api/internal/tick`, authenticated by `INTERNAL_TICK_SECRET` — made by a fourth
+service, `tick`: a pinned `curlimages/curl` container whose start command POSTs and then sleeps for
+an hour, forever.
+
+**It does not use Railway's cron schedule field, and that is deliberate.** How cron is configured on
+Railway is still unverified here — the CLI verified at 5.27.0 has no start-command or schedule flag —
+and the failure mode of guessing is expensive: a service created *without* a schedule is an ordinary
+service, and Railway restarts an ordinary service that exits, so a cron container whose command is
+one `curl` becomes a hot loop against an endpoint that spends money at OpenAI. A container that
+sleeps between its own ticks cannot do that whatever the dashboard says, and it puts the schedule in
+the repository next to every other default. See `infra/provision.py`, `tick_command()`.
 
 ### Why not a separate frontend service
 
@@ -224,7 +234,7 @@ SESSION_SECRET=<random-32-bytes>
 GOWA_URL=http://gowa.railway.internal:3000
 GOWA_BASIC_AUTH=penny:<same-password-as-APP_BASIC_AUTH>
 WHATSAPP_WEBHOOK_SECRET=<same-random-32-bytes-as-gowa>
-INTERNAL_TICK_SECRET=<random-32-bytes>     # M5, when the cron caller exists
+INTERNAL_TICK_SECRET=<random-32-bytes>     # and the same value on the tick service
 
 # Group onboarding. All three have working defaults; set them anyway, because
 # the defaults mean "on" and the blast radius is a password in a stranger's chat.

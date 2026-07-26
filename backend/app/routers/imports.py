@@ -49,7 +49,7 @@ from app.extraction.runner import (
     as_chunk_messages,
     render_call_input,
 )
-from app.extraction.service import build_care_brief, run_extraction_for_household
+from app.extraction.service import RunSummary, build_care_brief, run_extraction_for_household
 from app.ingest.contract import export_group_external_id
 from app.ingest.seam import ingest_messages
 from app.ingest.whatsapp_txt import (
@@ -82,6 +82,12 @@ SNIFF_LINES = 200
 # which is the only thing realistically holding it when an import lands.
 LOCK_RETRIES = 3
 LOCK_RETRY_SECONDS = 5
+# How many bounded batches one import job will drain before leaving the rest to the hourly tick.
+# `extract_max_batch_messages` caps a single run at 2,400 messages, so a 38,400-message export —
+# the largest the cost estimate lets through anywhere near `IMPORT_MAX_SPEND_USD` — is ~16 passes.
+# The ceiling is not expected to be reached; it is here so that a household whose backlog somehow
+# refuses to shrink cannot pin this task for ever.
+MAX_DRAIN_BATCHES = 40
 # How long a spawned job waits for the request that scheduled it to commit. Milliseconds in
 # practice; the ceiling only matters when the request failed and will never commit at all.
 COMMIT_WAIT_TRIES = 60
@@ -328,23 +334,11 @@ async def _extract_in_background(
 
     status, error = "complete", None
     try:
-        summary = None
-        for attempt in range(LOCK_RETRIES):
-            async with maker() as session:
-                summary = await run_extraction_for_household(
-                    session, household_id, max_spend_usd=max_spend_usd
-                )
-                await session.commit()
-            if summary.ran:
-                break
-            # Another run holds the household's advisory lock — a webhook, or the cron. It
-            # started BEFORE our messages landed, so it may not cover them; wait for it to
-            # finish rather than declaring an import complete that has not been extracted.
-            await asyncio.sleep(LOCK_RETRY_SECONDS * (attempt + 1))
-        assert summary is not None
-        if not summary.ran or summary.aborted_reason or summary.messages_unextracted:
+        passes = await _drain(maker, household_id, max_spend_usd)
+        last = passes[-1]
+        if not last.ran or last.aborted_reason or last.messages_unextracted or last.more_pending:
             # A spend abort leaves the remainder with `extracted_at IS NULL`, which is
-            # exactly what the hourly cron looks for. The import stays "extracting" and
+            # exactly what the hourly tick looks for. The import stays "extracting" and
             # self-heals rather than lying that it finished.
             #
             # `messages_unextracted` covers the other way that happens, and it is NOT
@@ -353,19 +347,24 @@ async def _extract_in_background(
             # `ran=True, aborted_reason=None`. Without this clause that import reports
             # "complete" with an `extracted_count` of just the system lines, and the family
             # is shown a finished import and an empty feed with nothing to retry.
+            #
+            # `more_pending` is the third: `MAX_DRAIN_BATCHES` passes were not enough to empty
+            # the cursor, so there is still conversation nobody has read.
             status = "extracting"
         log.info(
-            "import extraction done household=%s import=%s ran=%s events=+%d/~%d cost=%s "
-            "stamped=%d unextracted=%d aborted=%s",
+            "import extraction done household=%s import=%s passes=%d ran=%s events=+%d/~%d "
+            "cost=%s stamped=%d unextracted=%d aborted=%s more=%s",
             household_id,
             import_id,
-            summary.ran,
-            summary.events_inserted,
-            summary.events_updated,
-            summary.cost_usd,
-            summary.messages_stamped,
-            summary.messages_unextracted,
-            summary.aborted_reason,
+            len(passes),
+            last.ran,
+            sum(s.events_inserted for s in passes),
+            sum(s.events_updated for s in passes),
+            sum((s.cost_usd for s in passes), Decimal("0")),
+            sum(s.messages_stamped for s in passes),
+            sum(s.messages_unextracted for s in passes),
+            last.aborted_reason,
+            last.more_pending,
         )
     except Exception as exc:  # the job has no caller to raise to
         status, error = "failed", _client_sentence(exc)
@@ -378,6 +377,56 @@ async def _extract_in_background(
             .values(status=status, error=error)
         )
         await session.commit()
+
+
+async def _drain(maker: Any, household_id: UUID, max_spend_usd: Decimal) -> list[RunSummary]:
+    """Extract until the household's backlog is empty, one bounded batch per pass.
+
+    THE FAMILY IS WATCHING A PROGRESS BAR, WHICH IS WHY THIS LOOPS AND THE TICK DOES NOT. One
+    call to `run_extraction_for_household` covers at most `extract_max_batch_messages`, so a
+    six-month export is several passes; leaving them to the hourly tick would mean an import that
+    is genuinely working sits at "extracting" for a day. Each pass commits on its own, so the
+    feed fills in as it goes and a failure in pass nine keeps the events from passes one to eight.
+
+    Never fewer than one pass, so the caller can always read `passes[-1]`.
+
+    `max_spend_usd` IS PER PASS, NOT PER IMPORT, and that is a real change from the single
+    unbounded run this replaced. It is not the ceiling that matters: the preview already refused
+    anything estimated over `IMPORT_MAX_SPEND_USD` before a token was bought, and the guard that
+    actually holds is `llm_monthly_budget_usd_per_household`, checked once per run against
+    COMMITTED `llm_runs` rows. Each pass commits, so every pass after the first checks against
+    what the ones before it really spent — more passes means the household budget is consulted
+    more often, not less.
+
+    IT STOPS ON A PASS THAT GOT NOTHING THROUGH, and that clause is doing real work: the messages
+    a failed chunk leaves behind are `extracted_at IS NULL`, so the very next pass selects the
+    SAME rows in the SAME order and sends them to the same model — forty paid attempts at one
+    poisonous chunk. Once nothing is moving, the hourly tick is the right retry: slower, and with
+    whatever was broken given time to stop being broken.
+    """
+    passes: list[RunSummary] = []
+    for _ in range(MAX_DRAIN_BATCHES):
+        summary = None
+        for attempt in range(LOCK_RETRIES):
+            async with maker() as session:
+                summary = await run_extraction_for_household(
+                    session, household_id, max_spend_usd=max_spend_usd
+                )
+                await session.commit()
+            if summary.ran:
+                break
+            # Another run holds the household's advisory lock — a webhook, or the tick. It
+            # started BEFORE our messages landed, so it may not cover them; wait for it to
+            # finish rather than declaring an import complete that has not been extracted.
+            await asyncio.sleep(LOCK_RETRY_SECONDS * (attempt + 1))
+        assert summary is not None
+        passes.append(summary)
+
+        if not summary.ran or not summary.more_pending or summary.aborted_reason:
+            break
+        if summary.messages_unextracted >= summary.messages_considered:
+            break
+    return passes
 
 
 async def _await_commit(maker: Any, household_id: UUID, import_id: UUID) -> bool:

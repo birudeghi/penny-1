@@ -478,7 +478,7 @@ Messages are inserted and extraction runs in `BackgroundTasks`. Poll `GET /api/i
 `extracted_at` set, so a progress bar is `extracted_count / inserted_count`.
 
 A budget abort or a redeploy mid-extraction leaves `extracted_at` NULL on the remainder, and the
-hourly cron picks it up — so a stalled import self-heals rather than needing a re-upload. `error`
+hourly tick picks it up — so a stalled import self-heals rather than needing a re-upload. `error`
 is a rendered sentence when `status` is `"failed"`, `null` otherwise.
 
 - **404** if missing or not yours.
@@ -694,7 +694,7 @@ No auth. Reports configuration without leaking the key.
 
 ### `POST /api/internal/tick`
 
-Called by the Railway cron service, hourly. No cookie.
+Called by the `tick` service, hourly. No cookie.
 
 ```
 X-Penny-Tick-Secret: <INTERNAL_TICK_SECRET>
@@ -703,12 +703,31 @@ X-Penny-Tick-Secret: <INTERNAL_TICK_SECRET>
 **200**:
 
 ```json
-{ "households_scanned": 3, "messages_extracted": 118, "reports_generated": 1 }
+{
+  "households_scanned": 3,
+  "households_extracted": 2,
+  "households_failed": 0,
+  "households_remaining": 1,
+  "messages_extracted": 118,
+  "reports_generated": 0
+}
 ```
 
-Does the scheduled work: extract where `unextracted_count >= 40` **or**
-`oldest_unextracted_age > 6h`, pick up anything unextracted older than 10 minutes (this is what
-makes a backfill self-healing across a redeploy), and generate the weekly report on Monday 07:00 in
-each household's timezone.
+Does the scheduled work: extract every household the cadence gate would let through right now —
+`unextracted_count >= EXTRACT_MIN_UNEXTRACTED` **or**
+`oldest_unextracted_age > EXTRACT_MAX_AGE_HOURS`, the same two thresholds the live path applies,
+evaluated by the same code. That is what drains a group that has gone quiet (no next message, so
+nothing else ever fires the age trigger) and a backlog nobody is watching (a care profile change
+clears `extracted_at` for the whole household).
 
-- **401** on a wrong or missing secret.
+| Field | |
+|---|---|
+| `households_scanned` | How many were due when the tick started. |
+| `households_extracted` | How many ran. A household whose gate had already been satisfied by a concurrent webhook counts in neither this nor `households_failed`. |
+| `households_failed` | Raised and were skipped. **One household failing never stops the others** and never makes this a 5xx. |
+| `households_remaining` | Still owed work: cut short by `EXTRACT_MAX_BATCH_MESSAGES`, or never reached before the tick's internal deadline. They are still due, and the next tick takes them. A number that never falls means one tick an hour has stopped being enough. |
+| `messages_extracted` | Messages that got through, summed. Not messages looked at. |
+| `reports_generated` | **Always 0.** The weekly report is specified above and not built; the field is reported as a zero rather than omitted so the response shape does not change on the day it lands. |
+
+- **401** on a wrong or missing secret, and on a deployment where `INTERNAL_TICK_SECRET` is
+  unset — an unconfigured tick refuses everyone rather than admitting everyone.
