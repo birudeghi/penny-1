@@ -39,7 +39,6 @@ from app.llm.prompts import (
     EXTRACT_PROMPT_VERSION,
     MERGE_PROMPT,
     MERGE_PROMPT_VERSION,
-    care_brief_hash,
 )
 from app.llm.schemas import ExtractedEvent
 from app.llm.transport import FakeTransport
@@ -48,6 +47,9 @@ from scripts import eval_extraction, extract_export
 TZ = ZoneInfo("Europe/London")
 MODEL = "gpt-5.5-2026-04-23"
 CARE_BRIEF = "Care recipient: Margaret Doyle, 84, called Mum in this chat."
+# Passed in rather than derived from CARE_BRIEF: the runner is IO-free and never sees the
+# profile the hash identifies. Any opaque string stands in for one here.
+BRIEF_HASH = "0f1e2d3c4b5a69788796a5b4c3d2e1f0"
 
 # 5,600 in / 760 out at $5/$30 per Mtok — the plan's per-chunk cost, so the money assertions
 # below are the same arithmetic the cost table was built from.
@@ -207,7 +209,12 @@ async def run(
 ) -> tuple[Any, FakeTransport]:
     gateway, transport = gateway_over(*fixtures)
     result = await extract_messages(
-        messages, care_brief=CARE_BRIEF, tz=TZ, gateway=gateway, **kwargs
+        messages,
+        care_brief=CARE_BRIEF,
+        care_brief_hash=BRIEF_HASH,
+        tz=TZ,
+        gateway=gateway,
+        **kwargs,
     )
     return result, transport
 
@@ -274,7 +281,9 @@ async def test_request_carries_the_plan_s_extraction_budget_and_no_forbidden_par
 
 async def test_prompt_version_reaches_the_audit_trail() -> None:
     gateway, _ = gateway_over(completed(event()))
-    await extract_messages(chunk_messages(), care_brief=CARE_BRIEF, tz=TZ, gateway=gateway)
+    await extract_messages(
+        chunk_messages(), care_brief=CARE_BRIEF, care_brief_hash=BRIEF_HASH, tz=TZ, gateway=gateway
+    )
     assert gateway.recorder.records[0].prompt_version == EXTRACT_PROMPT_VERSION
 
 
@@ -282,10 +291,12 @@ async def test_the_care_brief_reaches_the_audit_trail_as_a_hash_never_as_text() 
     """The brief goes up as call INPUT, so `prompt_version` — a hash of the prompt file — is
     blind to it. This is the only record of the relevance filter a run ran under."""
     gateway, _ = gateway_over(completed(event()))
-    await extract_messages(chunk_messages(), care_brief=CARE_BRIEF, tz=TZ, gateway=gateway)
+    await extract_messages(
+        chunk_messages(), care_brief=CARE_BRIEF, care_brief_hash=BRIEF_HASH, tz=TZ, gateway=gateway
+    )
     (record,) = gateway.recorder.records
 
-    assert record.care_brief_hash == care_brief_hash(CARE_BRIEF)
+    assert record.care_brief_hash == BRIEF_HASH
     assert "Margaret" not in record.care_brief_hash
 
 
@@ -293,9 +304,14 @@ async def test_two_runs_under_different_briefs_are_told_apart_in_the_audit_trail
     """The reason the column exists. Same prompt file, same model, a brief that now asks for
     falls too — before this, both runs recorded provenance identical in every field."""
     recorded = []
-    for brief in (CARE_BRIEF, f"{CARE_BRIEF}\nLog every fall, however minor."):
+    for brief, brief_hash in (
+        (CARE_BRIEF, BRIEF_HASH),
+        (f"{CARE_BRIEF}\nLog every fall, however minor.", "ffffffffffffffffffffffffffffffff"),
+    ):
         gateway, _ = gateway_over(completed(event()))
-        await extract_messages(chunk_messages(), care_brief=brief, tz=TZ, gateway=gateway)
+        await extract_messages(
+            chunk_messages(), care_brief=brief, care_brief_hash=brief_hash, tz=TZ, gateway=gateway
+        )
         (record,) = gateway.recorder.records
         recorded.append(record)
 
@@ -308,10 +324,16 @@ async def test_every_chunk_of_one_run_records_the_same_brief() -> None:
     """Hashed once per run, off the string every chunk renders: a two-chunk import must not
     look like two different filters, or the column stops meaning anything."""
     gateway, _ = gateway_over(completed(event()), completed(symptom()))
-    await extract_messages(two_chunk_messages(), care_brief=CARE_BRIEF, tz=TZ, gateway=gateway)
+    await extract_messages(
+        two_chunk_messages(),
+        care_brief=CARE_BRIEF,
+        care_brief_hash=BRIEF_HASH,
+        tz=TZ,
+        gateway=gateway,
+    )
 
     hashes = {record.care_brief_hash for record in gateway.recorder.records}
-    assert hashes == {care_brief_hash(CARE_BRIEF)}
+    assert hashes == {BRIEF_HASH}
 
 
 async def test_a_merge_run_records_no_brief_rather_than_the_extraction_s() -> None:
@@ -328,11 +350,17 @@ async def test_a_merge_run_records_no_brief_rather_than_the_extraction_s() -> No
         completed(outcome_event),
         merged_response(event(outcome="Bloods taken, review in 2 weeks", is_future=False)),
     )
-    await extract_messages(two_chunk_messages(), care_brief=CARE_BRIEF, tz=TZ, gateway=gateway)
+    await extract_messages(
+        two_chunk_messages(),
+        care_brief=CARE_BRIEF,
+        care_brief_hash=BRIEF_HASH,
+        tz=TZ,
+        gateway=gateway,
+    )
 
     records = gateway.recorder.records
     assert [record.purpose for record in records] == ["extract", "extract", "merge"]
-    assert {record.care_brief_hash for record in records[:2]} == {care_brief_hash(CARE_BRIEF)}
+    assert {record.care_brief_hash for record in records[:2]} == {BRIEF_HASH}
     assert records[2].care_brief_hash is None
     # Still fully attributable: the merge kept the provenance it does have.
     assert records[2].prompt_version == MERGE_PROMPT_VERSION

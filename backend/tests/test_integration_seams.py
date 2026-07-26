@@ -40,6 +40,7 @@ from app.ingest.whatsapp_txt import ExportOptions, parse_export
 from app.llm import gateway as llm_gateway
 from app.llm.schemas import ExtractedEvent, Precision
 from tests.test_extraction_runner import (
+    BRIEF_HASH,
     CARE_BRIEF,
     TZ,
     chunk_messages,
@@ -135,7 +136,9 @@ async def test_a_citation_resolves_to_the_message_the_chunker_labelled(
     gateway, _ = gateway_over(
         completed(event(source_message_handles=["m3"], quotes=[quote], occurred_at="2026-01-12"))
     )
-    result = await extract_messages(adapted, care_brief=CARE_BRIEF, tz=TZ, gateway=gateway)
+    result = await extract_messages(
+        adapted, care_brief=CARE_BRIEF, care_brief_hash=BRIEF_HASH, tz=TZ, gateway=gateway
+    )
 
     assert len(result.events) == 1
     record = result.events[0]
@@ -177,7 +180,9 @@ async def test_the_runner_keys_events_in_the_household_timezone() -> None:
     """SEAM 2. The runner's `tz` argument is the household's; nothing may substitute UTC."""
     late = _late_night_event()
     gateway, _ = gateway_over(completed(late.model_dump()))
-    result = await extract_messages(chunk_messages(), care_brief=CARE_BRIEF, tz=TZ, gateway=gateway)
+    result = await extract_messages(
+        chunk_messages(), care_brief=CARE_BRIEF, care_brief_hash=BRIEF_HASH, tz=TZ, gateway=gateway
+    )
 
     assert len(result.events) == 1
     assert result.events[0].dedup_key == compute_dedup_key(late, TZ)
@@ -236,7 +241,9 @@ def test_every_precision_the_model_can_emit_is_one_the_events_table_accepts() ->
 async def test_a_run_s_records_carry_a_database_legal_precision() -> None:
     """SEAM 3b, at the point M4 will actually read it."""
     gateway, _ = gateway_over(completed(event(), symptom()))
-    result = await extract_messages(chunk_messages(), care_brief=CARE_BRIEF, tz=TZ, gateway=gateway)
+    result = await extract_messages(
+        chunk_messages(), care_brief=CARE_BRIEF, care_brief_hash=BRIEF_HASH, tz=TZ, gateway=gateway
+    )
 
     assert len(result.events) == 2
     for record in result.events:
@@ -366,7 +373,9 @@ def test_health_returns_ok_without_a_database_url(
 async def test_no_kwarg_named_temperature_top_p_or_max_tokens_ever_reaches_the_sdk() -> None:
     """SEAM 6. Asserted on the real call kwargs, not by reading the source."""
     gateway, transport = gateway_over(completed(event()))
-    await extract_messages(chunk_messages(), care_brief=CARE_BRIEF, tz=TZ, gateway=gateway)
+    await extract_messages(
+        chunk_messages(), care_brief=CARE_BRIEF, care_brief_hash=BRIEF_HASH, tz=TZ, gateway=gateway
+    )
 
     assert transport.calls
     for call in transport.calls:
@@ -397,7 +406,9 @@ def test_a_gateway_budget_refusal_renders_as_the_contract_s_409() -> None:
 async def test_safety_identifier_is_omitted_rather_than_sent_as_null() -> None:
     """The CLI and the eval have no household; an explicit null is a value the API may reject."""
     gateway, transport = gateway_over(completed(event()))
-    await extract_messages(chunk_messages(), care_brief=CARE_BRIEF, tz=TZ, gateway=gateway)
+    await extract_messages(
+        chunk_messages(), care_brief=CARE_BRIEF, care_brief_hash=BRIEF_HASH, tz=TZ, gateway=gateway
+    )
 
     assert "safety_identifier" not in transport.calls[0]
 
@@ -408,6 +419,7 @@ async def test_a_household_still_gets_a_pseudonymous_safety_identifier() -> None
     await extract_messages(
         chunk_messages(),
         care_brief=CARE_BRIEF,
+        care_brief_hash=BRIEF_HASH,
         tz=TZ,
         gateway=gateway,
         household_id=household_id,

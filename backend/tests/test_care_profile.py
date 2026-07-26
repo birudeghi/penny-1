@@ -191,8 +191,8 @@ def test_extraction_and_the_assistant_render_byte_identical_briefs() -> None:
     # Both doors must resolve to the ONE renderer. Asserting on identity rather than on
     # output is what makes this a regression test: a second implementation that happens to
     # produce the same string today would pass an output comparison and drift tomorrow.
-    assert extraction_module.care_profile.build_brief is cp.build_brief
-    assert assistant_module.build_brief is cp.build_brief
+    assert extraction_module.care_profile.build_brief_and_hash is cp.build_brief_and_hash
+    assert assistant_module.build_brief_and_hash is cp.build_brief_and_hash
 
 
 def test_a_malformed_stored_profile_is_treated_as_absent_not_fatal() -> None:
@@ -207,6 +207,53 @@ def test_a_malformed_stored_profile_is_treated_as_absent_not_fatal() -> None:
         care_profile = ["not", "a", "dict"]
 
     assert cp.load(_Worse()).name is None  # type: ignore[arg-type]
+
+
+def test_the_hash_carries_none_of_the_brief() -> None:
+    """`llm_runs` is the table an operator reads casually while chasing a cost spike.
+
+    The brief names a real person and what is wrong with them. This property used to live in
+    `test_llm_schemas.py` against the hasher that has since been deleted; it moved here with
+    the function rather than being dropped with it.
+    """
+    digest = cp.brief_hash(_full())
+    for word in ("juno", "alden", "croydon", "penicillin", "hypertension", "chen"):
+        assert word not in digest.lower()
+
+
+@pytest.mark.anyio
+async def test_the_two_columns_named_care_brief_hash_hold_the_same_value() -> None:
+    """THE point of unifying the hashers.
+
+    `households.care_brief_hash` gates re-extraction; `llm_runs.care_brief_hash` records what a
+    run ran under. They were briefly two different functions producing two different values
+    under one column name, which is worse than no audit trail: it looks like one and dead-ends.
+    "Which filter produced this event?" has to be a join.
+    """
+
+    class _Household:
+        id = None
+        timezone = "Europe/London"
+        care_recipient_name = "the placeholder"
+        care_profile = _full().model_dump(mode="json")
+
+    household = _Household()
+    stored = cp.brief_hash(cp.load(household), fallback_name=household.care_recipient_name)  # type: ignore[arg-type]
+
+    class _Session:
+        async def execute(self, *_a, **_k):
+            class _R:
+                def scalars(self):
+                    class _S:
+                        def all(self):
+                            return ["Liz", "Owen"]
+
+                    return _S()
+
+            return _R()
+
+    _, recorded = await cp.build_brief_and_hash(_Session(), household)  # type: ignore[arg-type]
+    assert recorded == stored
 
 
 def test_is_established_turns_true_on_a_name_alone() -> None:

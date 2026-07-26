@@ -230,9 +230,11 @@ async def run_extraction_for_household(
     recorder = DbRunRecorder(session, household_id)
     gateway = LLMGateway(recorder=recorder, budget=_HouseholdBudget(session))
 
+    brief, brief_hash = await care_profile.build_brief_and_hash(session, household)
     result = await extract_messages(
         pending,
-        care_brief=await build_care_brief(session, household),
+        care_brief=brief,
+        care_brief_hash=brief_hash,
         tz=tz,
         gateway=gateway,
         open_events=await _open_events(session, household_id, tz),

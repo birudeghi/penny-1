@@ -53,11 +53,10 @@ from pydantic import BaseModel, ConfigDict, Field
 # pot as everything else — which is what stops a mention loop in a busy group becoming a bill.
 # Reusing it beats a second copy of the 30-day window arithmetic that could drift from the one
 # the import path enforces.
-from app.care_profile import build_brief
+from app.care_profile import build_brief_and_hash
 from app.config import get_settings
 from app.extraction.service import _HouseholdBudget
 from app.llm.gateway import CallSpec, LLMGateway, Purpose
-from app.llm.prompts import care_brief_hash
 from app.llm.recorder import DbRunRecorder
 from app.models import Event, Message
 
@@ -211,6 +210,14 @@ class MentionContext:
     care_brief: str
     events: tuple[str, ...]
     messages: tuple[str, ...]
+    # The hash of the FILTER this brief came from, carried rather than derived: it is the
+    # value `households.care_brief_hash` stores, so a reply and the events it answered from
+    # are traceable to one profile. Deriving it from `care_brief` here would hash the
+    # participants and timezone too and never join against anything.
+    #
+    # Defaulted because a context built by hand in a test is exercising the PROMPT, and a
+    # required provenance field there is ceremony that teaches nothing.
+    care_brief_hash: str | None = None
 
     def render(self, question: str) -> str:
         timeline = "\n".join(self.events) or "(the timeline is empty)"
@@ -267,10 +274,14 @@ async def build_mention_context(session: AsyncSession, household: Household) -> 
     """The three blocks, read from this household's rows and nowhere else."""
     tz = ZoneInfo(household.timezone)
     now = datetime.now(UTC)
+    # One load for both, so the reply is recorded under the filter it actually used rather
+    # than one a concurrent settings save produced a moment later.
+    brief, brief_hash = await build_brief_and_hash(session, household)
     return MentionContext(
         timezone=household.timezone,
         today=now.astimezone(tz).strftime("%Y-%m-%d (%A)"),
-        care_brief=await build_brief(session, household),
+        care_brief=brief,
+        care_brief_hash=brief_hash,
         events=await _recent_events(session, household.id, tz, now),
         messages=await _recent_messages(session, household.id, tz),
     )
@@ -302,7 +313,7 @@ async def compose_reply(
             # The reply is answered under the same brief extraction ran under, and a reply that
             # missed something is investigated the same way — by asking which brief was in force
             # at the time, not which one the household has today.
-            care_brief_hash=care_brief_hash(context.care_brief),
+            care_brief_hash=context.care_brief_hash,
         )
     )
     return finish_reply(result.parsed)

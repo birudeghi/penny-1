@@ -45,7 +45,7 @@ from app.extraction.chunker import (
 from app.extraction.dedup import compute_dedup_key
 from app.extraction.merge import merge_events
 from app.llm.gateway import CallSpec, ChunkTooLargeError, ContentFilteredError, LLMGateway
-from app.llm.prompts import EXTRACT_PROMPT, EXTRACT_PROMPT_VERSION, care_brief_hash
+from app.llm.prompts import EXTRACT_PROMPT, EXTRACT_PROMPT_VERSION
 from app.llm.schemas import ExtractedEvent, ExtractionResult, validate_against_transcript
 
 if TYPE_CHECKING:
@@ -284,6 +284,7 @@ async def extract_messages(
     messages: Sequence[ChunkMessage],
     *,
     care_brief: str,
+    care_brief_hash: str | None,
     tz: ZoneInfo,
     gateway: LLMGateway,
     open_events: Sequence[OpenEvent] = (),
@@ -301,6 +302,7 @@ async def extract_messages(
     return await _Run(
         messages=messages,
         care_brief=care_brief,
+        care_brief_hash=care_brief_hash,
         tz=tz,
         gateway=gateway,
         open_events=tuple(open_events),
@@ -320,6 +322,7 @@ class _Run:
         *,
         messages: Sequence[ChunkMessage],
         care_brief: str,
+        care_brief_hash: str | None,
         tz: ZoneInfo,
         gateway: LLMGateway,
         open_events: tuple[OpenEvent, ...],
@@ -329,9 +332,15 @@ class _Run:
     ) -> None:
         self.messages = messages
         self.care_brief = care_brief.strip()
-        # Once per run, off the same string every chunk renders, so every row this run writes
-        # names the one filter it ran under even when the household edits the brief mid-import.
-        self.care_brief_hash = care_brief_hash(self.care_brief)
+        # PASSED IN, not derived. This module is IO-free by design and never sees the care
+        # profile the hash identifies — only the rendered brief, which deliberately contains
+        # more than the hash covers (participants and timezone are in the prompt and not in the
+        # filter). Deriving it from the string here would produce a value that can never be
+        # joined against `households.care_brief_hash`, which is exactly the dead-end audit trail
+        # this argument exists to prevent. Computed once per run by the caller that holds the
+        # profile, so every row this run writes names the one filter it ran under even when the
+        # household edits the brief mid-import.
+        self.care_brief_hash = care_brief_hash
         self.tz = tz
         self.gateway = gateway
         self.open_events = open_events

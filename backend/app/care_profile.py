@@ -280,6 +280,32 @@ async def participants_for(session: AsyncSession, household_id: Any) -> list[str
     return [name for name in names if name]
 
 
+async def build_brief_and_hash(session: AsyncSession, household: Household) -> tuple[str, str]:
+    """The brief to send, and the hash that identifies the filter it came from.
+
+    Both together, from one profile load, because the two must describe the same moment. A
+    caller that rendered the brief and then hashed a freshly-loaded profile could straddle a
+    concurrent settings save and record a run under a filter it did not use.
+
+    THE HASH IS THE SAME ONE `households.care_brief_hash` STORES, and that is the whole point
+    of returning it from here rather than letting each caller derive its own. `llm_runs` and
+    `households` hold the same value for the same filter, so "which filter produced this
+    event?" is a join. Two different hashes under one column name — which is what the audit
+    trail briefly had — is worse than no hash: it looks like a trail and dead-ends.
+
+    Deliberately NOT a hash of the returned brief string. Participants and timezone are in the
+    brief and not in the hash, so a member joining the chat does not read as a changed filter.
+    """
+    profile = load(household)
+    brief = render_brief(
+        profile,
+        participants=await participants_for(session, household.id),
+        timezone=household.timezone,
+        fallback_name=household.care_recipient_name,
+    )
+    return brief, brief_hash(profile, fallback_name=household.care_recipient_name)
+
+
 async def build_brief(session: AsyncSession, household: Household) -> str:
     """The brief for a household, rendered. The one call every consumer makes.
 

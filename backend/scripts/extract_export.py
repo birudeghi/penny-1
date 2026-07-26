@@ -271,6 +271,7 @@ def main(argv: list[str] | None = None) -> int:
         extract_messages(
             messages,
             care_brief=care_brief,
+            care_brief_hash=None,
             tz=tz,
             gateway=LLMGateway(),
             max_spend_usd=max_spend,
