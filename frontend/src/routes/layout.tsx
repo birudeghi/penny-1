@@ -21,9 +21,10 @@ const SETUP_NAV = [{ to: '/welcome', label: 'Set up', end: true }, ...NAV.slice(
 /**
  * The shell every screen renders inside, and the one place the session gate lives.
  *
- * A 401 from `GET /api/me` means signed out, and this redirects to /login. Doing it here rather
- * than per route means a new route cannot forget to be protected, and it is why the retry policy
- * matters: retrying the 401 would stall on a spinner before the redirect ever happened.
+ * A 401 from `GET /api/me` means signed out, and this redirects to /start — visitors get the
+ * marketing page, and existing families reach the login form from its Sign in link. Doing it here
+ * rather than per route means a new route cannot forget to be protected, and it is why the retry
+ * policy matters: retrying the 401 would stall on a spinner before the redirect ever happened.
  */
 export function Layout() {
   const session = useSession()
@@ -105,7 +106,7 @@ function Gate({
   atRoot: boolean
 }) {
   if (isPending) return <p className={styles.hint}>Loading…</p>
-  if (signedOut && !onLoginScreen) return <Navigate to="/login" replace />
+  if (signedOut && !onLoginScreen) return <Navigate to="/start" replace />
   if (!signedOut && onLoginScreen) return <Navigate to="/" replace />
   /*
    * A family that has just followed the link out of their WhatsApp group would otherwise land on

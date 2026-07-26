@@ -338,7 +338,9 @@ def welcome_message(username: str, passphrase: str, public_url: str) -> str:
         "\n"
         "Your family's account is ready:\n"
         "\n"
-        f"{url}\n"
+        # /login, not the root: a signed-out visit to `/` shows the marketing landing page, and
+        # this reader is past being marketed to — they hold the credentials two lines down.
+        f"{url}/login\n"
         f"Username: {username}\n"
         f"Password: {passphrase}\n"
         "\n"

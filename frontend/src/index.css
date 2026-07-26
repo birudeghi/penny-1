@@ -40,7 +40,13 @@
 
   --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
   --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
+  /* The front-door voice, shared by the landing page and the sign-in card. Loaded in index.html. */
+  --serif: 'Newsreader', Georgia, serif;
   --mono: ui-monospace, Consolas, monospace;
+
+  /* Accent for the front door's buttons and quiet links. */
+  --navy: #17456e;
+  --navy-contrast: #fff;
 
   font: 17px/150% var(--sans);
   letter-spacing: 0.18px;
@@ -92,6 +98,9 @@
     --kind-appointment: #93c5fd;
     --kind-medication: #c4b5fd;
     --kind-note: #9ca3af;
+
+    --navy: #8fb8dd;
+    --navy-contrast: #10131a;
   }
 }
 

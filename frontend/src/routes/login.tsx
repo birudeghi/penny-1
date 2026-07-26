@@ -2,7 +2,7 @@ import { useState } from 'react'
 
 import { USE_FIXTURES } from '../api/client'
 import { useLogin } from '../api/queries'
-import styles from './routes.module.css'
+import styles from './login.module.css'
 
 /**
  * One shared family credential — there is no users table. Feed attribution comes from the
@@ -23,71 +23,70 @@ export function LoginRoute() {
   const login = useLogin()
 
   return (
-    <>
-      <div className={styles.pageHeader}>
-        <h1>Sign in</h1>
+    <div className={styles.wrap}>
+      <div className={styles.card}>
+        <img className={styles.coin} src="/favicon.svg" alt="" aria-hidden />
+        <h1 className={styles.title}>Sign in</h1>
         <p className={styles.hint}>
-          Penny has one password for the whole family, not an account each.
+          One password for the whole family, not an account each.
         </p>
-      </div>
 
-      {login.error ? (
-        <p className={styles.error} role="alert">
-          {login.error.message}
-        </p>
-      ) : null}
+        {login.error ? (
+          <p className={styles.error} role="alert">
+            {login.error.message}
+          </p>
+        ) : null}
 
-      <form
-        className={styles.form}
-        onSubmit={(submit) => {
-          submit.preventDefault()
-          login.mutate({ username, password })
-        }}
-      >
-        <div className={styles.field}>
-          <label className={styles.label} htmlFor="username">
+        <form
+          className={styles.form}
+          onSubmit={(submit) => {
+            submit.preventDefault()
+            login.mutate({ username, password })
+          }}
+        >
+          <label className={styles.srOnly} htmlFor="username">
             Family name
           </label>
           <input
             id="username"
             className={styles.input}
+            placeholder="Family name"
             autoComplete="username"
             value={username}
             onChange={(change) => setUsername(change.target.value)}
           />
-        </div>
 
-        <div className={styles.field}>
-          <label className={styles.label} htmlFor="password">
+          <label className={styles.srOnly} htmlFor="password">
             Password
           </label>
           <input
             id="password"
             type="password"
             className={styles.input}
+            placeholder="Password"
             autoComplete="current-password"
             value={password}
             onChange={(change) => setPassword(change.target.value)}
           />
-        </div>
 
-        <div className={styles.actions}>
           <button
             type="submit"
-            className={`${styles.button} ${styles.buttonPrimary}`}
-            disabled={login.isPending || username.trim() === '' || password === ''}
+            className={styles.button}
+            disabled={
+              login.isPending || username.trim() === '' || password === ''
+            }
           >
             {login.isPending ? 'Signing in…' : 'Sign in'}
           </button>
-        </div>
-      </form>
+        </form>
+      </div>
 
       {USE_FIXTURES ? (
-        <p className={styles.hint} style={{ marginTop: 20 }}>
+        <p className={styles.demo}>
           Demo build: sign in as <code>the-doyles</code> /{' '}
           <code>correct-horse-battery-staple</code>.
         </p>
       ) : null}
-    </>
+    </div>
   )
 }

@@ -189,7 +189,9 @@ def test_welcome_message_carries_the_credential_and_its_warning() -> None:
     text = welcome_message(
         "cedar-thistle-04", "amber-willow-flint-tundra-marble-gecko-71", "https://pennyai.chat/"
     )
-    assert "https://pennyai.chat\n" in text  # trailing slash trimmed, not doubled
+    # /login, not the root — a signed-out visit to `/` is the marketing landing page, and this
+    # reader already holds the credentials. Trailing slash trimmed, not doubled.
+    assert "https://pennyai.chat/login\n" in text
     assert "cedar-thistle-04" in text
     assert "amber-willow-flint-tundra-marble-gecko-71" in text
     # The two lines that exist for reasons that outlive the copy.
