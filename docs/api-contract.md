@@ -99,7 +99,8 @@ lives under `details`, discriminated by `kind`.
   "sent_at": "2026-07-17T08:12:00Z",
   "sender": "Sarah",
   "quote": "Just got back from the GP with Mum, bloods taken, review in 2 weeks",
-  "transcribed": false
+  "transcribed": false,
+  "derived_from_media": false
 }
 ```
 
@@ -107,6 +108,13 @@ lives under `details`, discriminated by `kind`.
 model**, not typed. Always present; `false` for a typed message and for every event extracted
 before transcription existed. The UI must say so — speech-to-text mishears names, medicines and
 doses, which is precisely the class of error a family can catch and nobody else can.
+
+`derived_from_media` means **nobody said those words at all**: a model looked at a photo or read
+a document that was shared and wrote that sentence. Always present; `false` everywhere else. It
+is a stronger claim than `transcribed` and matters more in the UI — an excerpt attributed to
+Sarah that Sarah never wrote is how a family stops trusting the record. The attachment itself is
+at `GET /api/media/{message_id}` using the excerpt's `message_id`, so the description is
+checkable against the picture. At most one of the two flags is ever true.
 
 ### `details`, per kind
 
@@ -278,8 +286,11 @@ nobody is signed out. Re-sharing the new passphrase with the family is manual.
 
 ### `DELETE /api/household`
 
-Deletes the household and every message, event, member, import and report by cascade. **204**, and
-the session cookie is cleared. Irreversible; the UI must type-to-confirm.
+Deletes the household and every message, event, member, import and report by cascade, **and the
+stored photos and documents on the media volume**, which no cascade can reach. **204**, and the
+session cookie is cleared. The file purge is asynchronous — it waits for this request to commit
+before deleting anything, so a failed delete never destroys a living household's photographs.
+Irreversible; the UI must type-to-confirm.
 
 ---
 
@@ -672,9 +683,35 @@ vector. It is logged and dropped.
 
 - **401** on a missing or bad signature. No body detail beyond `{"detail": "Invalid signature."}`.
 
-`image` payloads are polymorphic: a bare `string` with no caption, an `object` with one. v1 stores
-`message_type`, leaves `text` null, downloads nothing, and the UI renders "📎 photo (not stored)".
-Edits, deletions and reactions are dropped at the adapter.
+`image` payloads are polymorphic: a bare `string` with no caption, an `object` with one. The
+handler stores `message_type` and leaves `text` null; **behind the 200**, an image or a document
+is fetched from the sidecar, written to the media volume and described by a model, and that
+description lands in `messages.text` with `payload.derived_from_media = true` beside it. Nothing
+about that is synchronous and every part of it may fail silently — a photo that could not be
+fetched or described stays exactly what it was. Edits, deletions and reactions are dropped at the
+adapter.
+
+---
+
+## Media
+
+### `GET /api/media/{message_id}`
+
+The photo or document a family sent, by the `messages.id` that carries it — the same id an
+excerpt's `message_id` gives you.
+
+Responds **200** with the raw bytes, `Content-Type` set from what the sidecar reported (mapped
+through a fixed allowlist, never sniffed from the bytes), `Content-Disposition: inline` for
+`image/jpeg`, `image/png`, `image/webp` and `image/gif` and `attachment` for everything else, and
+`Cache-Control: private, no-store, max-age=0`.
+
+- **404** for a message that does not exist, a message belonging to **another household**, and a
+  message of yours with no stored file. All three are byte-identical: this endpoint serves
+  photographs of an identifiable person and must not answer "that one is real, just not yours".
+- **401** when there is no valid session, before the id is looked at.
+
+There is no unauthenticated variant, no signed URL and no short alias: the id in the path is the
+row's own v4 UUID, and adding anything enumerable beside it would undo the paragraph above.
 
 ---
 

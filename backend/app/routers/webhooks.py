@@ -51,6 +51,13 @@
    there because it has to hold for the import job and the tick as well as for this handler,
    and the window's length is arithmetic over the timeouts below, not a round number.
 
+   **A PHOTO OR A DOCUMENT IS THE SAME SHAPE.** `app.media` fetches the attachment once,
+   writes the bytes to the volume and asks a model to describe them, in that same background
+   task and awaited in that same order. It is not a second `add_task` for exactly the reason
+   above, and `_awaiting_derivation` is its half of the ordering rule against every other
+   caller. A message is audio or it is an attachment, never both, so this adds one optional
+   step to the sequence and not two.
+
 6. **Idempotency is not implemented here.** It lives in the partial unique index on
    `(household_id, provider_message_id)` and is enforced by `ingest_messages`. This handler's
    only job is to pass `payload.id` through faithfully, because a replay is the *expected* case
@@ -103,6 +110,7 @@ from app.interview import (
     capture_answer,
 )
 from app.interview import should_listen as should_listen_for_interview
+from app.media import DERIVABLE_MESSAGE_TYPES, derive_media_text
 from app.mentions import has_mention_marker, mentions_penny, normalise_jid
 from app.models import Household, Message
 from app.onboarding import provision_for_group, welcome_message
@@ -144,8 +152,10 @@ class PayloadTooLargeError(PennyError):
 # milliseconds is 1973, so the boundary is unambiguous for anything WhatsApp will ever send.
 _MS_THRESHOLD = 1e11
 
-# Media keys we may see on a message event. v1 records the TYPE and stores no text and no file:
-# WHATSAPP_AUTO_DOWNLOAD_MEDIA is off, and the feed renders "photo (not stored)".
+# Media keys we may see on a message event. The TYPE is all that is decided here; the bytes and
+# the words come later, behind the 200, and only for the kinds `app.media` handles.
+# WHATSAPP_AUTO_DOWNLOAD_MEDIA stays off — it grows GOWA's own disk without bound — so every
+# file we keep is one `app.media` fetched on purpose.
 MEDIA_FIELDS: dict[str, str] = {
     "image": "image",
     "video": "video",
@@ -569,12 +579,20 @@ async def gowa_webhook(
     # wrong loses "Mum had a fall this morning". Being wrong the other way costs a skipped
     # download: `transcription_max_seconds` and `transcription_max_bytes` reject the ten-minute
     # podcast before a byte of it reaches a model.
+    #
+    # A PHOTO OR A DOCUMENT TAKES THE SAME ROUTE, for the same reason. `app.media` downloads the
+    # attachment, writes it to the volume and asks a model to describe it — seconds of work and
+    # a paid call, so it cannot be inline, and it must be AWAITED BEFORE EXTRACTION or the run
+    # reads "[photo]", finds nothing and stamps `extracted_at` against a row the description
+    # then lands on unread. `DERIVABLE_MESSAGE_TYPES` is imported rather than restated so the
+    # set this schedules on and the set `derive_media_text` acts on cannot drift apart.
     if result.inserted:
         background.add_task(
             spawn_extraction,
             result.household_id,
             payload.id,
             transcribe=message_type in AUDIO_MESSAGE_TYPES,
+            derive=message_type in DERIVABLE_MESSAGE_TYPES,
         )
 
     # (f) The reply path, and the ONLY one. A linked group, a new message (not a replay), and an
@@ -1247,6 +1265,7 @@ async def spawn_extraction(
     provider_message_id: str,
     *,
     transcribe: bool = False,
+    derive: bool = False,
 ) -> None:
     """DETACH the work from the request. Not gratuitous — see `extract_in_background`.
 
@@ -1254,7 +1273,9 @@ async def spawn_extraction(
     depends on.
     """
     task = asyncio.create_task(
-        extract_in_background(household_id, provider_message_id, transcribe=transcribe)
+        extract_in_background(
+            household_id, provider_message_id, transcribe=transcribe, derive=derive
+        )
     )
     # asyncio holds only a WEAK reference to a running task; without this the garbage
     # collector may cancel an extraction mid-run, at random, under load.
@@ -1267,8 +1288,9 @@ async def extract_in_background(
     provider_message_id: str,
     *,
     transcribe: bool = False,
+    derive: bool = False,
 ) -> None:
-    """Run extraction after the 200 has gone out — transcribing a voice note first.
+    """Run extraction after the 200 has gone out — reading the attachment first.
 
     Opens its **own** session: the request's session is closed by the `get_session` dependency
     as soon as the response is written, so using it here would touch a closed connection. That
@@ -1297,6 +1319,12 @@ async def extract_in_background(
     two orderings and one of them silently loses the care event in the recording. The same
     guarantee against every OTHER caller of extraction is `_awaiting_transcription`, in
     `app.extraction.service`; this await alone would not survive a second webhook arriving.
+
+    A PHOTO OR A DOCUMENT IS READ IN EXACTLY THE SAME PLACE, and the sentence above is true of
+    it word for word with "transcript" replaced by "description" and
+    `_awaiting_transcription` by `_awaiting_derivation`. At most one of the two runs for any
+    given message — a message is audio or it is an attachment — so the sequence is one optional
+    step, not two.
     """
     try:
         message_id = await _await_commit(household_id, provider_message_id)
@@ -1309,6 +1337,8 @@ async def extract_in_background(
             return
         if transcribe:
             await transcribe_in_background(household_id, message_id)
+        if derive:
+            await derive_in_background(household_id, message_id)
         async with get_sessionmaker()() as session:
             try:
                 summary = await run_extraction_for_household(session, household_id)
@@ -1372,6 +1402,55 @@ async def transcribe_in_background(household_id: UUID, message_id: UUID) -> None
     )
 
 
+async def derive_in_background(household_id: UUID, message_id: UUID) -> None:
+    """Keep one attachment's bytes and write a description of it, before the caller extracts.
+
+    The twin of `transcribe_in_background`, and every word of that docstring applies: NOTHING
+    ESCAPES, it opens its OWN session and commits it, and no outcome here may stop the
+    extraction that follows. GOWA down, the media expired, the volume unwritable, the household
+    over its budget, derivation switched off, or an exception `derive_media_text` promised not
+    to raise and raised anyway — all of them leave the message exactly as it was, `text` still
+    NULL and `message_type` still "image", and the run that follows renders it "[photo]" as it
+    always did. A photo we could not read is worth precisely what it was worth yesterday.
+
+    ITS OWN SESSION, AND IT COMMITS, for the reason transcription does: sharing the extraction
+    session would put the description and its `llm_runs` audit row inside the extraction
+    transaction, where a failed run rolls both back — and a rolled-back `llm_runs` row is an
+    OpenAI call that was made, billed, and is missing from the ledger the budget guard adds up.
+
+    NO TEXT AND NO FILENAME IN THE LOG, EVER. Ids, byte counts, a character count, the model.
+    """
+    started = time.monotonic()
+    try:
+        async with get_sessionmaker()() as session:
+            try:
+                derivation = await derive_media_text(session, message_id)
+            except Exception:
+                await session.rollback()
+                raise
+            await session.commit()
+    except Exception:
+        # `derive_media_text` is documented never to raise, so this is defence in depth: a bug
+        # in it must cost this message its description and nothing else.
+        log.exception(
+            "webhook.derivation_failed",
+            extra={"household_id": str(household_id), "message_id": str(message_id)},
+        )
+        return
+    log.info(
+        "webhook.media_described" if derivation else "webhook.media_not_described",
+        extra={
+            "household_id": str(household_id),
+            "message_id": str(message_id),
+            "duration_ms": int((time.monotonic() - started) * 1000),
+            "model": derivation.model if derivation else None,
+            "kind": derivation.kind if derivation else None,
+            "stored": derivation.stored if derivation else None,
+            "char_count": len(derivation.text) if derivation else 0,
+        },
+    )
+
+
 async def _await_commit(household_id: UUID, provider_message_id: str) -> UUID | None:
     """Block until the ingested message is visible from a fresh connection; its id, or None.
 
@@ -1429,10 +1508,13 @@ def _is_mutation(payload: GowaMessagePayload) -> bool:
 def _classify(payload: GowaMessagePayload) -> tuple[str, str | None]:
     """`(message_type, text)`.
 
-    v1 stores the type for media and **nothing else** — no caption, no download. That is not an
-    oversight: `WHATSAPP_AUTO_DOWNLOAD_MEDIA=false` means we never hold the file, and a caption
-    without its image reads as a non-sequitur in the feed and as a hallucination risk in a
-    prompt ("here it is" attached to nothing).
+    Media gets its type and **no text**, here, at the door. That is still deliberate and it is
+    NOT the old "we never hold the file" rule: `app.media` now downloads an image or a document
+    behind the 200 and writes a model's description into `messages.text`. What must not happen
+    is a CAPTION arriving as the message's text on the synchronous path — a caption without its
+    picture reads as a non-sequitur in the feed and as a hallucination risk in a prompt ("here
+    it is", attached to nothing) — and it must not pre-empt the description either, since
+    `derive_media_text` skips any message that already has text.
     """
     # `extra="allow"` means pydantic exposes unmodelled keys as attributes too, so one getattr
     # covers both the fields declared above and the media types GOWA adds after this was written.

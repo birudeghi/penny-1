@@ -74,6 +74,24 @@ _MEDIA_LABELS = {
 # and "(voice note)" is the model's only cue that "a pixie band" might have been "Apixaban".
 SPOKEN_LABEL = "voice note"
 
+# AND A DESCRIBED PHOTO IS THE SAME CASE ONE STEP FURTHER OUT. `app.media` writes a model's
+# reading of an image or a document into `messages.text` — "a red patch about 4cm across on the
+# left shin" — which is the contents of the attachment in the only form we have, so hiding it
+# behind "[photo]" throws away the message exactly as hiding a transcript would.
+#
+# But the attribution is different in a way the model must not miss, and it is a stronger
+# difference than "spoken": NOBODY SAID THESE WORDS. Sarah did not write that sentence and
+# nothing was heard; a machine looked at a picture and wrote it. Printing it as if it were her
+# message would put a model's inference in a human's mouth in a health record. So the sender
+# label says whose words they really are:
+#
+#     [m17] Tue 2026-07-14 21:04 — Sarah (photo, described by Penny): a red patch about 4cm...
+#
+# which is also the cue for how much to trust it. A photo can be misread as badly as a name can
+# be misheard, and "(described by Penny)" is the model's only warning that it is reading a
+# description rather than a report.
+DESCRIBED_LABEL = "described by Penny"
+
 
 @dataclass(frozen=True, slots=True)
 class ChunkMessage:
@@ -95,6 +113,11 @@ class ChunkMessage:
     # with a caption has both and is not a transcript — printing that caption as the spoken
     # words would attribute a sentence to a recording nobody transcribed.
     transcribed: bool = False
+    # `text` is a model's description of an attachment, not anything a person wrote or said.
+    # Same reason it is carried explicitly rather than inferred from `message_type == "image"
+    # and text`: a photo forwarded with a caption has both, and the caption really is the
+    # sender's own words.
+    derived_from_media: bool = False
 
 
 # The two handle namespaces, defined ONCE. `render_transcript` prints these labels, `handles`
@@ -258,6 +281,11 @@ def _render_line(handle: str, message: ChunkMessage, tz: ZoneInfo, *, context: b
     sender = message.sender_display_name or "Unknown"
     if _is_transcript(message):
         sender = f"{sender} ({SPOKEN_LABEL})"
+    elif _is_description(message):
+        # e.g. "Sarah (photo, described by Penny)". The media label stays in the attribution
+        # rather than in the text, exactly as it does for a transcript.
+        label = _MEDIA_LABELS.get(message.message_type, "attachment")
+        sender = f"{sender} ({label}, {DESCRIBED_LABEL})"
     return f"[{handle}] {marker}{stamp} — {sender}: {_render_body(message)}".rstrip()
 
 
@@ -266,13 +294,19 @@ def _is_transcript(message: ChunkMessage) -> bool:
     return message.transcribed and bool(message.text and message.text.strip())
 
 
+def _is_description(message: ChunkMessage) -> bool:
+    """Words we have, read off a picture. An undescribed photo is NOT this."""
+    return message.derived_from_media and bool(message.text and message.text.strip())
+
+
 def _render_body(message: ChunkMessage) -> str:
     # One message is one line: a raw newline would let the model read half a message as
     # a separate, unhandled one and cite a handle that does not cover the words it used.
     text = " ".join(message.text.split()) if message.text else ""
-    if message.message_type == "text" or _is_transcript(message):
-        # A transcript prints as its words, with no placeholder in front of them. The
-        # `(voice note)` on the sender is what keeps it honest — see SPOKEN_LABEL.
+    if message.message_type == "text" or _is_transcript(message) or _is_description(message):
+        # A transcript or a description prints as its words, with no placeholder in front of
+        # them. The label on the sender is what keeps it honest — see SPOKEN_LABEL and
+        # DESCRIBED_LABEL.
         return text
     label = _MEDIA_LABELS.get(message.message_type, "attachment")
     placeholder = f"[{label}: {message.media_filename}]" if message.media_filename else f"[{label}]"

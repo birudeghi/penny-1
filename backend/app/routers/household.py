@@ -21,6 +21,7 @@ from fastapi import APIRouter, Response, status
 from app.care_profile import load, write_profile
 from app.deps import CurrentHousehold, SessionDep
 from app.errors import UnauthorizedError, ValidationError
+from app.media import schedule_purge_after_delete
 from app.schemas import (
     MIN_PASSWORD_CHARS,
     HouseholdOut,
@@ -164,14 +165,28 @@ async def sign_out_everywhere(ctx: CurrentHousehold, session: SessionDep) -> Res
 
 @router.delete("/household", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_household(ctx: CurrentHousehold, session: SessionDep) -> Response:
-    """Irreversible. Every message, event, member, import and report goes with it.
+    """Irreversible. Every message, event, member, import, report AND FILE goes with it.
 
     The cascade is `ON DELETE CASCADE` in Postgres, declared on each child's `household_id`,
     so nothing here has to enumerate the tables — a table added later is covered by its own
     foreign key rather than by remembering to edit this function.
+
+    THE FILES ARE THE PART A FOREIGN KEY CANNOT REACH. A household's photographs live on a
+    volume at `<media_root>/<household_id>/`, and a cascade that takes every row would have
+    left every image of an identifiable person exactly where it was — unreachable, since each
+    read path needs a session for a household that no longer exists, but present. That is not
+    what "delete everything" means to the person clicking the button, and it is not what the
+    law they may be exercising means either.
+
+    The purge is scheduled rather than done here, and it WAITS FOR THIS TRANSACTION TO COMMIT
+    before it removes anything: `get_session` commits after this handler returns, so deleting
+    the files inline would mean a request that then failed had destroyed a living family's
+    photographs. See `app.media.purge_after_delete`.
     """
+    household_id = ctx.id
     await session.delete(ctx.household)
     await session.flush()
+    schedule_purge_after_delete(household_id)
     response = Response(status_code=status.HTTP_204_NO_CONTENT)
     # The session now points at a household that does not exist. Leaving the cookie in place
     # would give every subsequent request a 401 that looks exactly like a broken login.

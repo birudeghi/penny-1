@@ -24,7 +24,7 @@ Two more things Python buys that matter more than the extra lines:
     can read, and never in an echoed line that ends up in a transcript.
 
 IDEMPOTENCE, precisely. Re-running converges; it does not duplicate and it does not rotate.
-  * Project, services, volume, domain: created only when absent.
+  * Project, services, volumes (one per service), domain: created only when absent.
   * Generated secrets: minted only when the key is absent on the service. A second run does not
     reissue SESSION_SECRET, because that would log every household out.
   * Literal infra values (ENV, PORT, GOWA_URL, ...): enforced — reset when they have drifted.
@@ -68,6 +68,13 @@ GOWA_IMAGE = "aldinokemal2104/go-whatsapp-web-multidevice:v9.0.0"
 # chatstorage.db is unconditionally SQLite on local disk. The whatsmeow SESSION lives in Postgres
 # via DB_URI, which is the one that costs a physical-phone re-pair if it is lost.
 GOWA_MOUNT_PATH = "/app/storages"
+# penny's own volume: the photographs and documents families send, at
+# <mount>/<household_id>/<message_id>. It has to be a VOLUME and not container disk for the
+# obvious reason — Railway replaces the filesystem on every deploy, so a "photo of Mum's leg
+# from three weeks ago" would survive exactly until the next push — and `MEDIA_ROOT` below must
+# name this same path or the app writes into a directory that is not the mount. That pairing is
+# checked by --self-test rather than trusted.
+PENNY_MOUNT_PATH = "/app/media"
 
 # `${{svc.PORT}}` does not auto-resolve to the port a service listens on, so both ports are set
 # by hand and the webhook URL below hardcodes penny's.
@@ -144,6 +151,13 @@ def penny_vars(*, domain: str, postgres_service: str) -> list[Var]:
         # penny CAN take DATABASE_URL directly — Settings rewrites postgres:// and postgresql://
         # to postgresql+asyncpg:// on the way in. gowa cannot; see gowa_vars().
         Var("DATABASE_URL", "${{" + postgres_service + ".DATABASE_URL}}", Mode.IF_ABSENT),
+        # Where `app.media` writes the files a family sends. INFRA and not a code default,
+        # because it is the mount path of the volume this same script attaches — a fact about
+        # the deployment's shape rather than a preference. UNSET MEANS KEEP NOTHING: the app
+        # degrades to storing no bytes at all rather than writing photographs onto container
+        # disk that the next deploy wipes, so this variable and the volume are one decision
+        # made twice, and `--self-test` checks the two spellings agree.
+        Var("MEDIA_ROOT", PENNY_MOUNT_PATH, Mode.ENFORCE),
         # ENV-SPECIFIC
         Var("APP_PUBLIC_URL", f"https://{domain}", Mode.ENFORCE),
     ]
@@ -270,6 +284,9 @@ CODE_DEFAULT_KEYS: frozenset[str] = frozenset(
         "TRANSCRIPTION_MODEL",
         "TRANSCRIPTION_MAX_SECONDS",
         "TRANSCRIPTION_MAX_BYTES",
+        "DERIVE_MEDIA_TEXT",
+        "MEDIA_MODEL",
+        "MEDIA_DERIVE_MAX_BYTES",
         "DEFAULT_TIMEZONE",
         "SERVE_FRONTEND",
         "EXTRACT_MIN_UNEXTRACTED",
@@ -584,21 +601,45 @@ def ensure_gowa(rw: Railway, console: Console, *, postgres_service: str) -> bool
     return True
 
 
-def ensure_volume(rw: Railway, console: Console) -> None:
-    console.head(f"Volume {GOWA_MOUNT_PATH} on {GOWA_SERVICE!r}")
+def ensure_volume(rw: Railway, console: Console, *, service: str, mount_path: str) -> None:
+    """Attach one persistent volume to one service, once.
+
+    Both services need one and for the same class of reason: Railway replaces a service's
+    filesystem on every deploy, so anything written to container disk is gone at the next push.
+    For gowa that is the WhatsApp chat store; for penny it is the photographs and documents
+    families send, which are the one thing in this product that cannot be re-derived from
+    Postgres.
+
+    Matched on (service, mountPath) rather than on the volume's NAME, because Railway generates
+    the name and a re-run that matched on it would attach a second volume to the same path.
+    """
+    console.head(f"Volume {mount_path} on {service!r}")
     volumes = (rw.try_read("volume", "list") or {}).get("volumes", [])
     for volume in volumes:
-        if volume.get("serviceName") == GOWA_SERVICE and volume.get("mountPath") == GOWA_MOUNT_PATH:
+        if volume.get("serviceName") == service and volume.get("mountPath") == mount_path:
             console.step(f"already mounted ({volume['name']})")
             return
+    # A service may hold only one volume, so a volume on this service at a DIFFERENT path is
+    # not something to quietly add another beside — it is a deployment that was built by hand
+    # or by an older version of this script, and moving it would strand the data on it.
+    existing = next((v for v in volumes if v.get("serviceName") == service), None)
+    if existing is not None:
+        console.warn(
+            f"{service} already has a volume mounted at {existing.get('mountPath')}, not "
+            f"{mount_path}. Railway allows one volume per service, so this script will not "
+            f"add another. Move the mount by hand, or the service will read an empty directory."
+        )
+        return
 
     # `railway volume add` has NO --service flag — verified against `railway volume add --help`
     # on CLI 5.27.0, whatever the docs example says. It attaches to whichever service this
     # directory is LINKED to, so the link is the argument.
-    rw.write("service", "link", GOWA_SERVICE)
+    rw.write("service", "link", service)
     try:
-        rw.write("volume", "add", "-m", GOWA_MOUNT_PATH, "--json")
+        rw.write("volume", "add", "-m", mount_path, "--json")
     finally:
+        # Back to penny whatever happened: the link is process-wide directory state, and
+        # leaving it pointing at another service would silently retarget every later command.
         rw.write("service", "link", PENNY_SERVICE)
 
 
@@ -902,6 +943,19 @@ def self_test() -> int:
     checks.append(
         ("APP_PUBLIC_URL follows the domain", penny["APP_PUBLIC_URL"] == "https://example.test")
     )
+    # The pairing that is a silent data-loss bug if it ever drifts: MEDIA_ROOT tells the app
+    # where to write a family's photographs, and PENNY_MOUNT_PATH is where the volume actually
+    # is. Set them differently and every file is written to container disk, works perfectly in
+    # every test, and disappears on the next deploy with nothing to point at.
+    checks.append(
+        ("MEDIA_ROOT is penny's volume mount path", penny["MEDIA_ROOT"] == PENNY_MOUNT_PATH)
+    )
+    checks.append(
+        (
+            "the two services mount different paths",
+            PENNY_MOUNT_PATH != GOWA_MOUNT_PATH,
+        )
+    )
 
     # Idempotence, as arithmetic.
     desired = penny_vars(domain="example.test", postgres_service="Postgres")
@@ -1093,7 +1147,8 @@ def main(argv: list[str]) -> int:
         ensure_gowa(rw, console, postgres_service=postgres)
         ensure_penny(rw, console, domain=args.domain, postgres_service=postgres)
         ensure_tick(rw, console)
-        ensure_volume(rw, console)
+        ensure_volume(rw, console, service=GOWA_SERVICE, mount_path=GOWA_MOUNT_PATH)
+        ensure_volume(rw, console, service=PENNY_SERVICE, mount_path=PENNY_MOUNT_PATH)
 
         console.head("Variables")
         penny_changed = apply_variables(

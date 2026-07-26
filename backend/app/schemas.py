@@ -88,6 +88,12 @@ class SourceExcerpt(BaseModel):
     # excerpt that lost the key can only ever under-claim, never assert a transcript we do not
     # have. The UI labels it; the family can then check the words against the recording.
     transcribed: bool = False
+    # This quote is a model's description of a photo or a document that was shared: NOBODY
+    # typed it and nobody said it. A stronger claim than `transcribed` and a more important one
+    # to render — evidence attributed to Sarah that Sarah never wrote is the way a family stops
+    # trusting the record. Defaults to False for the same "can only under-claim" reason, and
+    # the file itself is at `GET /api/media/{message_id}` so the description is checkable.
+    derived_from_media: bool = False
 
 
 class EventActor(BaseModel):

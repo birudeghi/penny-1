@@ -176,6 +176,36 @@ class Settings(BaseSettings):
     # misbehaving (or hostile) media response cannot be unbounded.
     transcription_max_bytes: int = code_default(20 * 1024 * 1024)
 
+    # --- Photos and documents ---------------------------------------------------------------
+    # A photo of a rash, a discharge letter, a repeat-prescription slip. Before this they
+    # reached the record as an empty row: `_classify` returns no text for media, so the feed
+    # showed "photo (not stored)" and the extraction prompt was told a photo existed and
+    # nothing about it. The bytes are kept so a family can look again; the derived words are
+    # what make the picture reach the record at all.
+    #
+    # INFRA — the volume mount path, which is a fact about the deployment's shape and is set
+    # verbatim by `infra/provision.py` (it mounts the volume there in the same run). UNSET
+    # MEANS WE KEEP NOTHING, and that is the deliberate default rather than a repo-relative
+    # directory: without a volume, container-local disk is wiped on every deploy, so a default
+    # that "worked" would scatter photographs of an identifiable person across ephemeral disks
+    # for no benefit. Text derivation is independent of it and still runs.
+    media_root: str | None = infra(None)
+    # CODE-DEFAULT — the kill switch, exactly like `transcribe_voice_notes`. False leaves an
+    # image or a document as the placeholder it was before this existed, spends nothing, and
+    # calls no model. Flipping it is a commit, so the incident leaves a trace.
+    derive_media_text: bool = code_default(True)
+    # CODE-DEFAULT — the model that reads a picture. Vision and document input both go through
+    # the Responses API, so this is an ordinary text model and it MUST have a price in
+    # `app.llm.pricing.PRICES`; an unpriced one is refused rather than billed at zero, because
+    # a $0 row is spend the per-household budget guard cannot see.
+    media_model: str = code_default("gpt-5.5-2026-04-23")
+    # CODE-DEFAULT — the most we will base64 into a model request. `transcription_max_bytes`
+    # (20 MB) still bounds what comes off the sidecar into memory; this is the smaller, second
+    # cap on what we are willing to PAY to have read. WhatsApp re-encodes photos to well under
+    # a megabyte, so anything past this is a forwarded scan or a video-sized PDF: it is still
+    # STORED, it is simply not sent to a model.
+    media_derive_max_bytes: int = code_default(6 * 1024 * 1024)
+
     # CODE-DEFAULT — the timezone every household's day boundaries are computed in until
     # households carry their own. A UK product; when that stops being true it becomes a column,
     # not an environment variable.

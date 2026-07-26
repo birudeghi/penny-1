@@ -475,6 +475,9 @@ def _excerpts(excerpts: Sequence[SourceExcerpt]) -> list[dict[str, Any]]:
             # Stored per EXCERPT, not per event: one event routinely cites a spoken message and
             # a typed one, and the family needs to know which sentence is the machine's hearing.
             "transcribed": excerpt.transcribed,
+            # And which sentence nobody said at all. A symptom event routinely cites the photo
+            # and the message beside it; those two quotes carry very different authority.
+            "derived_from_media": excerpt.derived_from_media,
         }
         for excerpt in excerpts
     ]
