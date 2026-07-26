@@ -25,6 +25,7 @@ import sqlalchemy as sa
 from fastapi import APIRouter, Query
 from sqlalchemy import select
 
+from app import photos as photo_rule
 from app.deps import CurrentHousehold, SessionDep
 from app.models import Event, Member, Message
 from app.schemas import (
@@ -33,6 +34,7 @@ from app.schemas import (
     UPCOMING_LIMIT,
     FeedPage,
     PendingReread,
+    PhotoSet,
     UpcomingPage,
     to_event,
 )
@@ -40,8 +42,20 @@ from app.schemas import (
 router = APIRouter(prefix="/api", tags=["feed"])
 
 
-def _rows_to_events(rows: list[tuple[Event, str | None]]) -> list:
-    return [to_event(event, display_name) for event, display_name in rows]
+def _rows_to_events(
+    rows: list[tuple[Event, str | None]],
+    photos: dict[UUID, PhotoSet] | None = None,
+) -> list:
+    """`photos=None` means nobody looked, which is not the same as "there are none".
+
+    `/api/upcoming` passes nothing, on purpose: an event still in the future has no conversation
+    behind it to draw photographs from, so running the query there would spend a statement to
+    prove a point already known.
+    """
+    return [
+        to_event(event, display_name, (photos or {}).get(event.id))
+        for event, display_name in rows
+    ]
 
 
 async def _pending_reread(session: SessionDep, household_id: UUID) -> PendingReread | None:
@@ -133,7 +147,12 @@ async def get_feed(
         stmt = stmt.where(Event.occurred_at < before)
 
     rows = list((await session.execute(stmt)).all())
-    events = _rows_to_events(rows)
+    # Photographs are attached AFTER the page is chosen, never as a join onto the page query.
+    # A join would multiply the event rows by their photo count and quietly break `limit`, which
+    # is the pagination cursor — a page of 25 entries would come back as 25 rows or 80 depending
+    # on how many pictures the family sent that week. See `app.photos` for the rule itself.
+    photos = await photo_rule.photos_for_page(session, ctx.id, [event.id for event, _ in rows])
+    events = _rows_to_events(rows, photos)
     # Null when a partial page came back: that is the client's stop signal, and returning a
     # cursor unconditionally makes it fetch the same empty tail forever.
     next_before = events[-1].occurred_at if len(events) == limit else None

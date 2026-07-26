@@ -13,4 +13,9 @@ export const queryKeys = {
   whatsapp: ['whatsapp'] as const,
   report: (id: string) => ['reports', id] as const,
   importStatus: (id: string) => ['imports', id] as const,
+  /**
+   * Nested under the event id so that invalidating one entry's photographs cannot invalidate
+   * the feed, and so a future `['events', id]` invalidation would take these with it.
+   */
+  eventPhotos: (id: string) => ['events', id, 'photos'] as const,
 }

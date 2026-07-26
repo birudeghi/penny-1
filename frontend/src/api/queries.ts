@@ -30,6 +30,7 @@ import {
   changePassword,
   deleteEvent,
   generateReport,
+  getEventPhotos,
   getFeed,
   getImportStatus,
   getMembers,
@@ -101,6 +102,26 @@ export function useUpcoming() {
     queryKey: queryKeys.upcoming,
     queryFn: ({ signal }) => getUpcoming(signal),
     refetchInterval: 60_000,
+  })
+}
+
+/**
+ * Every photograph for one entry, fetched only once the lightbox is actually open.
+ *
+ * `enabled` is the whole point. A feed page holds up to 25 entries and this must not become 25
+ * extra requests on load — it fires when somebody opens a photograph and not before. No
+ * `refetchInterval` either: the set cannot change while a modal is sitting over it, and the feed
+ * behind it is already polling.
+ *
+ * `staleTime: Infinity` because the photographs attached to an entry only move when extraction
+ * re-reads the household, at which point the feed poll invalidates everything anyway.
+ */
+export function useEventPhotos(eventId: string | null) {
+  return useQuery({
+    queryKey: queryKeys.eventPhotos(eventId ?? ''),
+    queryFn: ({ signal }) => getEventPhotos(eventId as string, signal),
+    enabled: eventId !== null,
+    staleTime: Infinity,
   })
 }
 

@@ -20,10 +20,11 @@ from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import photos as photo_rule
 from app.deps import CurrentHousehold, SessionDep
 from app.errors import NotFoundError, ValidationError
 from app.models import Event, Member
-from app.schemas import DETAILS_MODEL, AnyEvent, EventPatch, to_event
+from app.schemas import DETAILS_MODEL, AnyEvent, EventPatch, EventPhotos, to_event
 
 router = APIRouter(prefix="/api", tags=["events"])
 
@@ -105,6 +106,30 @@ async def patch_event(
     # No session.commit() — get_session owns the transaction and commits when this returns.
     await session.flush()
     return to_event(event, actor_display_name)
+
+
+@router.get("/events/{event_id}/photos", response_model=EventPhotos)
+async def get_event_photos(
+    event_id: UUID,
+    ctx: CurrentHousehold,
+    session: SessionDep,
+) -> EventPhotos:
+    """Every photograph for one entry, uncapped. What the lightbox pages through.
+
+    THIS EXISTS SO THE FEED'S CAP CAN STAY A CAP. `/api/feed` returns at most
+    `FEED_PHOTOS_PER_EVENT` photographs per entry, which bounds a 500-entry page at a knowable
+    number of rows. Lifting that limit so the lightbox could page through everything would put
+    an unbounded photo list on a route that every open tab in the household refetches every
+    sixty seconds. So the feed keeps its bound, and the full set is fetched here — once, for one
+    entry, because somebody clicked a photograph.
+
+    `_load` first, and its 404 is the whole tenancy story: another household's event id is
+    indistinguishable from one that never existed, and nothing below this line reads a household
+    id off the row. Deleted entries 404 too — a soft-deleted entry is gone from the feed, and a
+    route that still served its photographs would be a way to read the record after deleting it.
+    """
+    await _load(session, ctx.id, event_id)
+    return EventPhotos(photos=await photo_rule.photos_for_event(session, ctx.id, event_id))
 
 
 @router.delete("/events/{event_id}", status_code=status.HTTP_204_NO_CONTENT)

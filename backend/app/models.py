@@ -247,6 +247,20 @@ class Message(Base):
             "sent_at",
             postgresql_where=sa.text("extracted_at IS NULL"),
         ),
+        # The feed's photo lookup: "images with stored bytes, this household, between these two
+        # timestamps". Same two columns as the cursor above and the opposite half of the table —
+        # that one is partial on `extracted_at IS NULL` and every photograph the feed can show has
+        # already been extracted, so it contains none of them.
+        #
+        # `message_type` is deliberately not in the key. It is a recheck over whatever the range
+        # returns, never a widening of it, and leaving it out keeps this index useful the day
+        # documents get attached to entries too.
+        sa.Index(
+            "ix_messages_household_sent_at_with_media",
+            "household_id",
+            "sent_at",
+            postgresql_where=sa.text("media_content_type IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = _uuid_pk()

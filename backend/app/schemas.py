@@ -21,7 +21,8 @@ failure mode is a value the `events.occurred_at_precision` CHECK constraint reje
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal, get_args, get_origin
 from uuid import UUID
 
@@ -67,6 +68,23 @@ NoteCategory = Literal["logistics", "mood", "finance", "equipment", "admin", "ot
 FEED_DEFAULT_LIMIT = 200
 FEED_MAX_LIMIT = 500
 UPCOMING_LIMIT = 50
+
+# How many photographs ride along with one entry on the feed. A DISPLAY cap, not a fetch cap:
+# `GET /api/events/{id}/photos` returns the whole set for one entry so the lightbox can page
+# past it. It lives here because it bounds the feed response — 4 x `FEED_MAX_LIMIT` rows is the
+# worst case a page can cost, and that number has to be a constant somebody can find.
+FEED_PHOTOS_PER_EVENT = 4
+
+# How far EITHER SIDE of an entry's most recent source message an UNCITED photograph may be
+# picked up from. Cited photographs ignore this entirely (see `Photo.cited`): the model attached
+# them to this entry and no clock may overrule that.
+#
+# Anchored on the most recent source rather than spanning all of them, and this is not a detail.
+# `events.source_message_ids` grows on every re-extraction, so a long-running entry's span can
+# reach across a week of unrelated pictures — and an entry drawn from a single message has a span
+# of ZERO, which made the first version of this rule match nothing at all for the commonest shape
+# of entry. See `app.photos` for the full argument.
+PHOTO_WINDOW = timedelta(hours=24)
 MIN_PASSWORD_CHARS = 12
 TITLE_MAX_CHARS = 80
 BODY_MAX_CHARS = 400
@@ -95,6 +113,56 @@ class SourceExcerpt(BaseModel):
     # trusting the record. Defaults to False for the same "can only under-claim" reason, and
     # the file itself is at `GET /api/media/{message_id}` so the description is checkable.
     derived_from_media: bool = False
+
+
+class Photo(BaseModel):
+    """A photograph shared in the conversation this entry was drawn from.
+
+    NOT A `SourceExcerpt`, and the difference is the whole reason this model exists. An excerpt
+    is evidence: the model read it and cited it. A photo may be evidence (`cited=True`) or it
+    may be a picture from the same conversation that Penny judged to be about this person's
+    care but did not attach to this entry. Putting the second kind into `source_excerpts` would
+    make that array lie, and that array's honesty is what the feed is built on.
+
+    `description` IS ALWAYS PENNY'S WORDS, never the family's, and that is an invariant of the
+    ingest path rather than something checked here. `webhooks._classify` returns `(kind, None)`
+    for every media message, so a WhatsApp caption is discarded at the door and a stored photo
+    always arrives with `text IS NULL`. `media._skip_reason` then refuses to download anything
+    that already HAS text, so a row carrying a human's words never gets bytes and therefore
+    never gets a `media_content_type` — which is the column the photo query filters on. There
+    is no reachable row with stored bytes and human-written text, so there is no flag here to
+    tell the two apart. `test_media_derivation.py` asserts the download half of that.
+
+    The bytes are at `GET /api/media/{message_id}`, same-origin and cookie-authenticated.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    message_id: UUID
+    sent_at: UtcDatetime
+    sender: NullableStr = ""
+    # Penny's reading of the picture, or empty when she could not produce one — over budget, an
+    # unreadable type, a file too large to send. A CITED photo can reach the feed undescribed;
+    # an uncited one cannot, because the marker meaning "this is about her care" is written in
+    # the same transaction as the text and the query requires it.
+    description: NullableStr = ""
+    # This photo is in the entry's `source_message_ids`: the model attached it to this entry.
+    # False is the weaker claim — shared nearby, judged relevant, not linked — and it is worded
+    # differently everywhere it is shown, because overclaiming here is how a holiday snap ends
+    # up reading as proof for a medical entry.
+    cited: bool = False
+
+
+class EventPhotos(BaseModel):
+    """`GET /api/events/{id}/photos` — the uncapped set, for paging in the lightbox.
+
+    A wrapper object and not a bare array, for the reason every list endpoint here is: an array
+    at the root of a response has nowhere to grow. The day this needs a count, a cursor, or a
+    "some of these are gone from the volume" flag, a wrapper takes a key and a bare array takes
+    a breaking change.
+    """
+
+    photos: list[Photo] = Field(default_factory=list)
 
 
 class EventActor(BaseModel):
@@ -160,6 +228,19 @@ class EventBase(BaseModel):
     body: str | None = None
     actor: EventActor | None = None
     source_excerpts: list[SourceExcerpt] = Field(default_factory=list)
+    # The photographs filed with this entry: cited ones first, then most recent. Capped at
+    # `FEED_PHOTOS_PER_EVENT` for display. Always present, `[]` when there are none — a client
+    # must never have to tell "no photos" apart from "this response predates photos".
+    photos: list[Photo] = Field(default_factory=list)
+    # How many more matched beyond `photos`. A count rather than a silence: this record's whole
+    # argument is that an absence is never left looking like nothing happened. The UI says
+    # "+N more" and the lightbox pages through them via `GET /api/events/{id}/photos`.
+    photos_withheld: int = 0
+    # Photographs in this entry's conversation whose files we do not hold, which in practice
+    # means a `.txt` import — a WhatsApp export writes `<image omitted>` and ships no file, and
+    # those rows carry no `provider_message_id` to fetch by, ever. Counted so the UI can say so
+    # instead of leaving a gap the family has to explain to themselves.
+    photos_unavailable: int = 0
     # Non-null means a human edited it and re-extraction will never overwrite it again.
     edited_at: UtcDatetime | None = None
     created_at: UtcDatetime
@@ -233,6 +314,20 @@ def _coerce_details(model: type[BaseModel], raw: Any) -> dict[str, Any]:
     return cleaned
 
 
+@dataclass(frozen=True, slots=True)
+class PhotoSet:
+    """What one entry's photo lookup found: the ones to show, and what it did not show.
+
+    A dataclass and not a dict because all three fields have to travel together — a caller that
+    hands `to_event` a list of photos and forgets the two counts produces a card that quietly
+    claims it is showing everything. Bundling them makes that omission impossible to express.
+    """
+
+    photos: list[dict[str, Any]] = field(default_factory=list)
+    withheld: int = 0
+    unavailable: int = 0
+
+
 def _excerpts(raw: Any) -> list[dict[str, Any]]:
     """Keep the excerpts that parse, drop the ones that don't, never fail the request.
 
@@ -254,12 +349,24 @@ def _excerpts(raw: Any) -> list[dict[str, Any]]:
     return kept
 
 
-def to_event(row: Any, actor_display_name: str | None = None) -> Any:
+def to_event(
+    row: Any,
+    actor_display_name: str | None = None,
+    photos: PhotoSet | None = None,
+) -> Any:
     """A database row -> the per-kind union the browser sees. The only conversion, on purpose.
 
     `row` is an `app.models.Event`; it is typed loosely so this module does not import the ORM
     just to annotate one parameter. `actor_display_name` comes from the caller's join, because
     doing it here would be a lazy load per row on an async session.
+
+    `photos` DEFAULTS TO NONE AND MEANS "none were looked up", not "there are none". That
+    distinction is why the parameter is optional rather than required: `routers/events.py` calls
+    this after a PATCH and after a POST, where the entry's photographs have not been queried and
+    are not what the caller asked about. Making it required would force those two call sites to
+    invent an answer, and the answer they would invent is an empty list — which is a claim that
+    this entry has no photographs. It says nothing instead, and renders as `[]` with both counts
+    at zero, exactly as a genuinely photoless entry does.
     """
     kind = row.kind if row.kind in _EVENT_MODEL else "note"
     actor = None
@@ -280,6 +387,9 @@ def to_event(row: Any, actor_display_name: str | None = None) -> Any:
             "actor": actor,
             "details": _coerce_details(DETAILS_MODEL[kind], row.details),
             "source_excerpts": _excerpts(row.source_excerpts),
+            "photos": [] if photos is None else photos.photos,
+            "photos_withheld": 0 if photos is None else photos.withheld,
+            "photos_unavailable": 0 if photos is None else photos.unavailable,
             "edited_at": row.edited_at,
             "created_at": row.created_at,
         }

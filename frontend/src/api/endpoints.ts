@@ -6,6 +6,7 @@
 
 import type {
   Event,
+  EventPhotos,
   FeedPage,
   Household,
   ImportAccepted,
@@ -109,6 +110,18 @@ export function patchEvent(id: string, patch: EventPatch): Promise<Event> {
 
 export function deleteEvent(id: string): Promise<void> {
   return api(`/events/${id}`, { method: 'DELETE' })
+}
+
+/**
+ * Every photograph for one entry, uncapped — what the lightbox pages through.
+ *
+ * The feed sends at most four per entry so a 500-entry page has a knowable size. This is the
+ * escape hatch for the one entry somebody actually opened, and it is deliberately NOT fetched
+ * with the feed: 500 entries' worth of unbounded photo lists, refetched every sixty seconds by
+ * every open tab, is the request this endpoint exists to avoid.
+ */
+export function getEventPhotos(id: string, signal?: AbortSignal): Promise<EventPhotos> {
+  return api(`/events/${encodeURIComponent(id)}/photos`, { signal })
 }
 
 export function getReports(signal?: AbortSignal): Promise<ReportSummary[]> {

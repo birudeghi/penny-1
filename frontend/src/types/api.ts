@@ -31,6 +31,50 @@ export interface SourceExcerpt {
    * presented as if it were typed gives them no reason to look.
    */
   transcribed: boolean
+  /**
+   * NOBODY SAID THESE WORDS AT ALL: a model looked at a photograph or read a document that was
+   * shared, and wrote this sentence about it.
+   *
+   * A stronger claim than `transcribed` and a more important one to render. A quote attributed
+   * to Sarah that Sarah never wrote is how a family stops trusting the record — and it is worse
+   * here than for a voice note, because at least a voice note contains something Sarah said.
+   *
+   * Optional in TYPE only, and never optional on the wire: the backend has always sent it. It is
+   * declared optional so fixtures and responses minted before the field existed still typecheck,
+   * and it defaults to the weaker claim so a lost key can only ever under-claim.
+   */
+  derived_from_media?: boolean
+}
+
+/**
+ * A photograph shared in the conversation an entry was drawn from.
+ *
+ * NOT A `SourceExcerpt`, and the difference is the point. An excerpt is evidence: the model read
+ * it and cited it. A photo may be evidence (`cited`) or a picture from the same conversation that
+ * Penny judged to be about this person's care but did not attach to this entry. Rendering the
+ * second kind as evidence is how a holiday snap ends up looking like proof for a medical entry.
+ *
+ * `description` IS ALWAYS PENNY'S WORDS, never the family's. The webhook discards a WhatsApp
+ * caption before the row is written, and a message that already has text is never downloaded — so
+ * no row can carry both stored bytes and a human's caption. That is why there is no flag here to
+ * tell them apart, and why it is always safe to attribute this sentence to Penny.
+ *
+ * The bytes are at `/api/media/{message_id}` — same origin, so the session cookie rides along and
+ * there is no token to leak into a history entry or a referrer.
+ */
+export interface Photo {
+  message_id: string
+  sent_at: string
+  sender: string
+  /** Empty when Penny could not read it. A cited photo may be undescribed; an uncited one cannot. */
+  description: string
+  /** The model attached this photo to this entry. False is the weaker claim — shared nearby. */
+  cited: boolean
+}
+
+/** `GET /api/events/{id}/photos` — the uncapped set, for paging past the feed's display cap. */
+export interface EventPhotos {
+  photos: Photo[]
 }
 
 /** Who did or reported it. Comes from the WhatsApp sender, not from who logged in. */
@@ -49,6 +93,25 @@ export interface EventBase {
   actor: EventActor | null
   /** May be empty for a human-authored event. */
   source_excerpts: SourceExcerpt[]
+  /**
+   * Photographs filed with this entry — cited first, then most recent, at most four.
+   *
+   * The next three are optional in TYPE only, and never optional on the wire: the backend always
+   * sends all three, with `[]` and `0` for an entry that has none. Declared optional for the same
+   * reason `FeedPage.pending_reread` is — so the offline fixtures and any response minted before
+   * photos existed still typecheck — and every read site collapses the absence to the same
+   * meaning as the empty case, which is correct: neither is a claim that something is missing.
+   */
+  photos?: Photo[]
+  /** How many more matched beyond `photos`. Render as "+N more", never as silence. */
+  photos_withheld?: number
+  /**
+   * Photographs in this entry's conversation whose files we do not hold, which in practice means
+   * a `.txt` import: WhatsApp exports write `<image omitted>` and ship no file, and those rows
+   * carry no provider id to fetch by, ever. Say so — an unexplained gap in a medical record reads
+   * as "nothing happened", which is the failure `PendingReread` exists to prevent one level up.
+   */
+  photos_unavailable?: number
   /** Non-null means a human edited it and re-extraction will never overwrite it again. */
   edited_at: string | null
   created_at: string

@@ -3,12 +3,13 @@ import { useState } from 'react'
 import { Evidence } from '@/components/evidence'
 import { EventEditor } from '@/components/event-editor'
 import { KindNode } from '@/components/kind-node'
+import { PhotoLightbox } from '@/components/photo-lightbox'
 import { useDeleteEvent, useUpdateEvent } from '@/api/queries'
 import { formatTimelineDate } from '@/lib/datetime'
 import { usePeople } from '@/lib/people'
 import { entryTimeLabel, provenanceOf, timelineKind } from '@/lib/timeline'
 import { cn } from '@/lib/utils'
-import type { Event } from '@/types/api'
+import type { Event, Photo } from '@/types/api'
 
 const WEEKDAY: Record<string, string> = {
   Mon: 'Monday',
@@ -97,23 +98,7 @@ function splitDate(date: string): { day: string; weekday: string } {
  * measure, which is tight but honest; below 640 it is most of the screen. `lg` is where the context
  * column arrives, which is a separate question about a separate column.
  */
-export function TimelineEntry({
-  event,
-  timeZone,
-  image,
-}: {
-  event: Event
-  timeZone: string
-  /**
-   * A photograph filed with the entry.
-   *
-   * A PROP AND NOT A FIELD ON `Event`, because it is not in the API contract and `types/api.ts`
-   * is a mirror of that contract — adding a field there to make one component compile is how the
-   * mirror stops being one. Nothing passes it today; see `EntryPhoto` for the contract it is
-   * shaped against and for what happens when the bytes do not arrive.
-   */
-  image?: { messageId: string; description: string | null }
-}) {
+export function TimelineEntry({ event, timeZone }: { event: Event; timeZone: string }) {
   const [editing, setEditing] = useState(false)
   const people = usePeople()
   const update = useUpdateEvent()
@@ -257,27 +242,29 @@ export function TimelineEntry({
             </div>
 
             {/*
-              Inside the card, and square: the photograph is filed with the entry, not published
-              under it. Narrower than `md` it stops being a square in the margin and becomes the
-              width of the card — but capped at 280px, so that on a phone it is as big as the
-              screen can make it and on a tablet it is a photograph filed under an entry rather
-              than a photograph the entry has been reduced to captioning. It used to be
-              `hidden sm:block`, which on the one screen that matters most deleted the best
-              evidence in the record — a photo of a rash beats every description of one, and the
-              phone is where it will actually be looked at.
+              Inside the card, and beside the text: the photographs are filed with the entry, not
+              published under it. Narrower than `md` the column stops existing and they become the
+              width of the card — capped at 280px, so that on a phone they are as big as the
+              screen can make them and on a tablet they are photographs filed under an entry
+              rather than an entry reduced to captioning them. This used to be `hidden sm:block`,
+              which on the one screen that matters most deleted the best evidence in the record.
 
-              `key` is the message id so a re-extraction that files a different photo under the
-              same entry gets a fresh element, and does not inherit the previous one's failure.
+              ONE PHOTOGRAPH IS 168px; TWO OR MORE WIDEN THE COLUMN. DESIGN.md §3.6 said a fixed
+              168px square because for a long time one was all there was. Three photographs at
+              168px are three unreadable crops, and a picture of a wound that cannot be read is
+              decoration — the one thing the "filed, not published" rule says it must not be. What
+              does NOT change is the card's height: the strip runs horizontally precisely so that
+              photo count can never drive entry height. A vertical stack was drawn and rejected
+              for exactly that. The timeline's rhythm is the design; nothing inside a card may set
+              the card's height except its prose.
             */}
-            {image && (
-              <div className="mt-4 w-full max-w-[280px] md:col-start-2 md:row-span-2 md:row-start-1 md:mt-0 md:w-[168px] md:self-start">
-                <EntryPhoto
-                  key={image.messageId}
-                  messageId={image.messageId}
-                  description={image.description}
-                />
-              </div>
-            )}
+            <EntryPhotos
+              eventId={event.id}
+              photos={event.photos ?? []}
+              withheld={event.photos_withheld ?? 0}
+              unavailable={event.photos_unavailable ?? 0}
+              timeZone={timeZone}
+            />
 
             {/* `empty:hidden` because `Evidence` renders nothing for a hand-written entry, and a
                 margin under nothing is still a margin — a card with an invisible 14px of extra
@@ -305,93 +292,191 @@ function mediaSrc(messageId: string): string {
 }
 
 /**
- * A photograph the family shared, and Penny's reading of it, kept visibly apart.
+ * The photographs filed with one entry: one square, or a strip of up to four.
  *
- * WHOSE WORDS ARE WHOSE IS THE ENTIRE POINT OF THIS COMPONENT. The photo is the family's: someone
- * held a phone over a swollen ankle and pressed send, and that image is a primary artefact of the
- * record. The description is not — it is a model's account of what it thinks it can see, and a
- * model that says "a mild rash on the left forearm" about a photograph of a pressure sore has
- * produced a sentence a GP could act on. So the description is never printed as a caption, which
- * is the form a reader takes to be the family's own words; it is printed as Penny's description,
- * named as such, every time it appears.
+ * THE CAPTION SAYS THE WEAKEST THING THAT IS TRUE OF ALL OF THEM, and that constraint comes from
+ * the layout. There is one caption under a group of up to four photographs, so there is no wording
+ * that can say "the first two are evidence and the third is not" without becoming a sentence
+ * nobody reads. So the group under-claims on purpose: the moment any photograph in it is uncited,
+ * the whole caption drops to "shared around this time". The exact per-photograph claim exists, and
+ * it lives in the lightbox, where there is room for one sentence about one picture.
  *
- * THAT RULE HOLDS FOR A SCREEN READER TOO, which is why the `alt` is prefixed rather than bare.
- * A sighted reader receives two things — the photograph, and a caption saying where it came from.
- * A screen-reader user receives one string, and if that string is the bare derived text then the
- * model's guess arrives with exactly the authority of a human caption, indistinguishable from
- * something the family wrote. The prefix costs four words and puts both facts in the one channel
- * that reader has.
+ * Overclaiming is the failure being avoided. A photograph that merely happened to be sent nearby,
+ * rendered under "Photos from Sarah with this entry", is a holiday snap presented as evidence for
+ * a symptom — and this record's whole argument is that a family can trust what it says about where
+ * things came from.
  *
- * A PHOTO THAT DOES NOT LOAD DEGRADES TO THE TEXT, never to a broken-image glyph. The media
- * endpoint can 404 on a message whose bytes WhatsApp has since dropped, 401 on an expired session,
- * or 500 on a bad day, and the browser's default answer to all three is a torn-page icon and the
- * alt text rendered as if it were an error message. What is left when a photo fails is still the
- * most useful thing available — Penny's description of it — so that is what is shown, in a band
- * block that holds roughly the space the photo held, with a caption that says plainly that the
- * photo could not be loaded and that these are Penny's words about it.
+ * PENNY'S DESCRIPTION IS NOT HERE, and that is DESIGN.md §4.5: interpretation is closed until
+ * asked for. A model's reading of a photograph is interpretation in exactly the sense the clinical
+ * summary is, and leaving one open under the record puts a machine's guess permanently between the
+ * family and the thing it read. It is one click away, in the lightbox and in the evidence drawer,
+ * both of which are already folded.
  *
- * IT DOES NOT DECIDE ITS OWN WIDTH. The caller places it — 168px in a column of its own on a wide
- * screen, the full width of the card on a phone — and everything here is relative to that. A
- * component that hard-codes the one measure it was first drawn at is the reason the old version
- * was `hidden sm:block`: it could not be any other size, so below `sm` it was deleted instead.
+ * "+N MORE" IS A SENTENCE, NEVER A CONTROL. Expanding the strip in place would grow the entry and
+ * push every entry below it down the page while somebody is reading — DESIGN.md §4.6, the same
+ * rule that makes the composer overlay instead of expand. The lightbox pages through everything
+ * instead, so the cap costs nothing.
+ */
+function EntryPhotos({
+  eventId,
+  photos,
+  withheld,
+  unavailable,
+  timeZone,
+}: {
+  eventId: string
+  photos: Photo[]
+  withheld: number
+  unavailable: number
+  timeZone: string
+}) {
+  const [openAt, setOpenAt] = useState<number | null>(null)
+
+  // An entry with neither photographs nor placeholders renders nothing at all — no element, no
+  // reserved column, no empty block. A card with an invisible gap in it is the drift that makes a
+  // list of cards look hand-spaced.
+  if (photos.length === 0 && unavailable === 0) return null
+
+  const single = photos.length === 1
+
+  return (
+    <div className="mt-4 w-full max-w-[280px] md:col-start-2 md:row-span-2 md:row-start-1 md:mt-0 md:self-start md:[--photo-col:168px] md:w-[var(--photo-col)] md:data-[strip=true]:w-[248px]">
+      {photos.length > 0 && (
+        <figure className="w-full" data-strip={!single}>
+          <div className={cn('grid gap-1.5', single ? 'grid-cols-1' : 'grid-cols-3')}>
+            {photos.map((photo, index) => (
+              <EntryPhoto
+                // The message id, so a re-extraction that files a different photograph under the
+                // same entry gets a fresh element and does not inherit the previous one's failure.
+                key={photo.message_id}
+                photo={photo}
+                square={!single}
+                onOpen={() => setOpenAt(index)}
+              />
+            ))}
+          </div>
+
+          <figcaption className="mt-1.5 text-[12.5px] leading-snug text-muted-foreground">
+            {groupCaption(photos, timeZone)}
+            {withheld > 0 && <span className="block">+{withheld} more</span>}
+          </figcaption>
+        </figure>
+      )}
+
+      {/* An absence nobody explains reads as "nothing happened" — the same failure `RereadBanner`
+          exists to prevent one level up. A WhatsApp export ships `<image omitted>` and no file, so
+          for imported history this is permanent and the only honest thing is to say so. */}
+      {unavailable > 0 && (
+        <p
+          className={cn(
+            'text-[12.5px] leading-snug text-muted-foreground',
+            photos.length > 0 ? 'mt-1.5' : '',
+          )}
+        >
+          {unavailable === 1 ? 'A photo was' : `${unavailable} photos were`} shared here. WhatsApp
+          exports do not include the files.
+        </p>
+      )}
+
+      <PhotoLightbox
+        eventId={openAt === null ? null : eventId}
+        photos={photos}
+        index={openAt ?? 0}
+        timeZone={timeZone}
+        onIndexChange={setOpenAt}
+        onClose={() => setOpenAt(null)}
+      />
+    </div>
+  )
+}
+
+/** The weakest claim true of every photograph in the group. See `EntryPhotos`. */
+function groupCaption(photos: Photo[], timeZone: string): string {
+  const first = photos[0]
+  if (!first) return ''
+  const when = formatTimelineDate(first.sent_at, timeZone)
+  const senders = [...new Set(photos.map((photo) => photo.sender).filter(Boolean))]
+  const who = senders.length === 1 ? senders[0] : null
+  // One uncited photograph in the group drops the whole caption to the weaker sentence. It is not
+  // possible to be precise per photograph here, so it is precise in the safe direction.
+  if (photos.some((photo) => !photo.cited)) {
+    return who ? `Shared by ${who} around this time — ${when}` : `Shared around this time — ${when}`
+  }
+  const noun = photos.length === 1 ? 'Photo' : 'Photos'
+  return who ? `${noun} from ${who} — ${when}` : `${noun} shared in the chat — ${when}`
+}
+
+/**
+ * One photograph in the card. A button, because it opens the lightbox.
  *
- * Exported so its contract can be tested without standing up a query client and a people
- * provider around a whole entry.
+ * IT HOLDS ITS SLOT WHEN IT FAILS. The media endpoint can 404 on a message whose bytes WhatsApp
+ * dropped, 401 on an expired session, or 500 on a bad day. The previous version swapped the image
+ * for a differently-sized text block, which was fine when a card had exactly one photograph and
+ * is not fine in a strip: one failure would slide its neighbours sideways under a reader's eye,
+ * which is DESIGN.md §4.6 in miniature. So the failed state keeps the same box and puts the words
+ * inside it.
+ *
+ * THE BAND IS THE PLACEHOLDER, not a spinner. `--band` is already spec'd as the surface behind an
+ * entry photograph (§1.1), the box is sized before the bytes arrive, and there is no motion system
+ * to spin anything with (§5.2). A lazily-loaded strip that reserves its space simply fills in.
+ *
+ * Exported so its contract can be tested without a query client and a people provider around it.
  */
 export function EntryPhoto({
-  messageId,
-  description,
+  photo,
+  square = false,
+  onOpen,
 }: {
-  /** The message the photo arrived on. `/api/media/{message_id}` serves the bytes. */
-  messageId: string
-  /** Penny's reading of the photo. Null when she has not described it — an empty string is the
-   *  same absence, and is treated as one rather than rendered as a blank caption. */
-  description: string | null
+  photo: Photo
+  /** In a strip every thumb is square; alone it keeps the taller 4:3 on a phone. */
+  square?: boolean
+  onOpen?: () => void
 }) {
   const [failed, setFailed] = useState(false)
-  const derived = description?.trim() || null
+  const derived = photo.description?.trim() || null
 
   return (
     // `lg` (10px) is the radius for a block that is not a card — DESIGN.md §1.5 — and `--band` is
     // the surface a photograph sits on, so the block behind a photo that has not arrived is the
     // same colour as the block behind one that has.
-    <figure className="w-full">
-      {failed ? (
-        derived && (
-          <p className="rounded-lg bg-band px-3.5 py-3 text-[12.5px] leading-relaxed break-words">
-            {derived}
-          </p>
-        )
-      ) : (
-        <div className="aspect-[4/3] w-full overflow-hidden rounded-lg bg-band md:aspect-square">
-          <img
-            src={mediaSrc(messageId)}
-            alt={altFor(derived)}
-            loading="lazy"
-            decoding="async"
-            onError={() => setFailed(true)}
-            className="size-full object-cover"
-          />
-        </div>
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-label={altFor(derived)}
+      className={cn(
+        'block w-full overflow-hidden rounded-lg bg-band',
+        square ? 'aspect-square' : 'aspect-[4/3] md:aspect-square',
       )}
-
-      {/* The photograph's provenance line, in the same 12.5px muted the entry's own provenance
-          line uses, because that is exactly what it is. */}
-      <figcaption className="mt-1.5 text-[12.5px] leading-snug text-muted-foreground">
-        {captionFor(failed, derived)}
-      </figcaption>
-    </figure>
+    >
+      {failed ? (
+        /* Same box, different contents — never a broken-image glyph, and never a resize. */
+        <span className="flex size-full items-center justify-center px-2 py-1.5 text-left text-[11px] leading-tight text-muted-foreground">
+          {derived ? 'Photo unavailable — Penny’s description is in the evidence' : 'Photo unavailable'}
+        </span>
+      ) : (
+        <img
+          src={mediaSrc(photo.message_id)}
+          alt={altFor(derived)}
+          loading="lazy"
+          decoding="async"
+          onError={() => setFailed(true)}
+          className="size-full object-cover"
+        />
+      )}
+    </button>
   )
 }
 
-/** See `EntryPhoto`: the prefix is what stops a model's description arriving as a human caption. */
+/**
+ * The accessible name for one thumbnail.
+ *
+ * NAMED AS PENNY'S, ALWAYS. A screen-reader user receives one string where a sighted reader gets a
+ * picture and a caption, so if that string were the bare description then a model's guess would
+ * arrive with exactly the authority of something the family wrote. On a stored photograph the
+ * description is never the family's caption — the webhook drops captions at the door and a message
+ * that already has text is never downloaded — so attributing it to Penny is the truth, not a hedge.
+ */
 function altFor(derived: string | null): string {
-  if (!derived) return 'Photo shared in the chat. Penny has not described it.'
-  return `Photo shared in the chat. Penny's description: ${derived}`
-}
-
-function captionFor(failed: boolean, derived: string | null): string {
-  if (!failed) return 'Photo shared in the chat'
-  if (derived) return "Penny's description — the photo itself could not be loaded."
-  return 'A photo was shared in the chat. It could not be loaded, and Penny has not described it.'
+  if (!derived) return 'Photo shared in the chat. Penny has not described it. Open it larger.'
+  return `Photo shared in the chat. Penny's description: ${derived}. Open it larger.`
 }

@@ -55,6 +55,13 @@ def upgrade() -> None:
     # No index, deliberately. The only lookup is by primary key with a household predicate,
     # which `pk_messages` already answers; an index here would be a row per message for a
     # query nobody makes.
+    #
+    # SUPERSEDED BY `c5d8a13f6b20`. That reasoning held exactly as long as its premise did: the
+    # feed now attaches photographs to entries, which asks "which images with stored bytes did
+    # this household send between these two timestamps" — a query nobody was making when the
+    # paragraph above was written. The index it adds is partial on `media_content_type IS NOT
+    # NULL`, so it is still not a row per message; it is a row per stored file, which is the
+    # thing that made the original objection right and makes the reversal cheap.
 
 
 def downgrade() -> None:

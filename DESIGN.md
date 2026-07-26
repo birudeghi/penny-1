@@ -382,9 +382,25 @@ shadow-[0_1px_2px_rgb(0_0_0/0.03)]  transition-colors  hover:border-rule
 
 Inside, in order: time (13px muted, tabular) → headline (17.5px semibold) → summary (14px muted,
 68ch) → provenance (12.5px muted) → the Evidence trigger. A photograph, when present, sits to the
-right as a fixed 168px square:
+right:
 
 > Inside the card, and square: the photograph is filed with the entry, not published under it.
+
+**One photograph is a fixed 168px square. Two or more widen the column.** The square was written
+as the only case because it was the only case; when photo attachment shipped it stopped being
+true. Three photographs at 168px are three unreadable crops, and a photograph of a wound that
+cannot be read is decoration — the one thing the quote above says it must not be. So the column
+grows to fit a horizontal strip, and the quote survives intact: the strip still sits *beside* the
+text, never under it.
+
+What does **not** move is the card's height. The strip is horizontal precisely so that photo count
+cannot drive entry height — a vertical stack was drawn, and rejected, because it made a
+three-photo entry two and a half times taller than a photoless one and put a void in the text
+column. The timeline's rhythm is the design (§3.2); nothing inside a card may set the card's
+height except its prose.
+
+Below `md` the column does not exist and the photographs run full width under the text, capped at
+280px. See §5.1 for what is still undecided further down.
 
 ---
 

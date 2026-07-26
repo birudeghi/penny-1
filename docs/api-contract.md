@@ -88,6 +88,9 @@ lives under `details`, discriminated by `kind`.
 | `body` | `string \| null` | ≤400 chars, third person, factual. |
 | `actor` | `{ member_id: string, display_name: string } \| null` | Who did or reported it. `null` when unattributable. |
 | `source_excerpts` | `SourceExcerpt[]` | Verbatim evidence. Powers `SourceDisclosure`. May be empty for a human-authored event. |
+| `photos` | `Photo[]` | Photographs filed with this entry, cited first then most recent. At most 4; always present, `[]` when none. |
+| `photos_withheld` | `number` | How many more matched beyond `photos`. Render as "+N more"; the full set is at `GET /api/events/{id}/photos`. |
+| `photos_unavailable` | `number` | Photographs in this entry's conversation whose files we do not hold — a `.txt` export ships `<image omitted>` and no file. Say so; never leave the gap unexplained. |
 | `edited_at` | `string \| null` | Non-null means a human edited it, and **re-extraction will never overwrite it again**. Show an "edited" marker. |
 | `created_at` | `string` | |
 
@@ -116,6 +119,58 @@ Sarah that Sarah never wrote is how a family stops trusting the record. The atta
 at `GET /api/media/{message_id}` using the excerpt's `message_id`, so the description is
 checkable against the picture. At most one of the two flags is ever true.
 
+`Photo`:
+
+```json
+{
+  "message_id": "9b2c7e10-44af-4d1e-8a03-6c5b1f9e2d77",
+  "sent_at": "2026-07-17T08:09:00Z",
+  "sender": "Sarah",
+  "description": "Swelling on the left ankle, skin taut and shiny.",
+  "cited": true
+}
+```
+
+**A `Photo` is not a `SourceExcerpt`.** An excerpt is evidence the model read and cited. A photo
+may be evidence (`cited: true`) or a picture from the same conversation that Penny judged to be
+about this person's care but did not attach to this entry (`cited: false`). Putting the second
+kind into `source_excerpts` would make that array lie, and that array's honesty is the reason the
+feed is believable.
+
+**`description` is ALWAYS Penny's words, never the family's**, and that is structural rather than
+a convention. The webhook discards a WhatsApp caption before the row is written, so a stored
+photo always arrives with no text and gets described by a model; and a message that already has
+text is never downloaded, so a row carrying a human's caption never has a file to serve. There is
+no reachable row with stored bytes and human-written text, which is why there is no flag here to
+tell them apart. `description` may be `""` when Penny could not read the picture — over budget, an
+unreadable type, too large. A **cited** photo can reach the feed undescribed; an uncited one
+cannot, because the marker meaning "this is about her care" is written with the description.
+
+**`cited: false` is a weaker claim and must be worded as one.** The card says "Photos shared
+around this time" whenever any photo in the group is uncited, because one caption cannot carry
+per-photo provenance; the exact claim per photo belongs in the lightbox. Never render an uncited
+photograph as evidence for the entry.
+
+Bytes are at `GET /api/media/{message_id}`, same-origin and cookie-authenticated.
+
+### `GET /api/events/{event_id}/photos`
+
+Every photograph for one entry, uncapped — what a lightbox pages through.
+
+```json
+{ "photos": [ /* Photo, cited first then most recent */ ] }
+```
+
+`/api/feed` caps `photos` at 4 per entry so a 500-entry page has a knowable size. This route
+lifts that cap for one entry, fetched once because somebody clicked a photograph. **404** for
+another household's event id, for a soft-deleted entry, and for an id that never existed — all
+byte-identical.
+
+It may return a photograph that `/api/feed` attributed to a neighbouring entry. On the feed a
+photograph belongs to exactly one entry (otherwise a busy day renders the same picture five times
+down the page); here there is only one entry to belong to. The asymmetry only ever shows *more*,
+never fewer, so `photos_withheld` can under-promise but never over-promise.
+
 ### `details`, per kind
 
 | `kind` | `details` |
@@ -143,6 +198,9 @@ interface EventBase {
   body: string | null;
   actor: { member_id: string; display_name: string } | null;
   source_excerpts: SourceExcerpt[];
+  photos: Photo[];
+  photos_withheld: number;
+  photos_unavailable: number;
   edited_at: string | null;
   created_at: string;
 }
