@@ -102,9 +102,10 @@ class _FakeGowa:
                 # GOWA requires `phone` on the download route and this double did not, which is
                 # how an outage that broke every voice note and every photograph lived under a
                 # green suite. See `test_transcription.FakeGowa` for the whole story.
-                if path.endswith("/download") and not parse_qs(urlparse(self.path).query).get(
-                    "phone", [""]
-                )[0]:
+                if (
+                    path.endswith("/download")
+                    and not parse_qs(urlparse(self.path).query).get("phone", [""])[0]
+                ):
                     self._json(
                         400, {"code": "VALIDATION_ERROR", "message": "phone: cannot be blank."}
                     )
@@ -116,7 +117,10 @@ class _FakeGowa:
                         200,
                         {
                             "code": "SUCCESS",
-                            "results": {"file_path": "statics/media/test/voice", "media_type": "audio"},
+                            "results": {
+                                "file_path": "statics/media/test/voice",
+                                "media_type": "audio",
+                            },
                         },
                     )
                     return

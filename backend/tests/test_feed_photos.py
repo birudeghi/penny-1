@@ -159,7 +159,9 @@ async def test_a_nearby_photo_penny_judged_relevant_is_filed_as_context(
 ) -> None:
     """The whole reason the window exists: a picture the model did not cite but did read."""
     household = await make_household(session)
-    spoken = await add_photo(session, household, sent_at=MARCH, described=False, message_type="text")
+    spoken = await add_photo(
+        session, household, sent_at=MARCH, described=False, message_type="text"
+    )
     nearby = await add_photo(session, household, sent_at=MARCH + timedelta(minutes=20))
     entry = await add_event(session, household, occurred_at=MARCH, sources=[spoken])
 
@@ -181,7 +183,9 @@ async def test_a_photo_penny_found_irrelevant_never_reaches_a_clinical_entry(
     care, and time proximity must not be allowed to overrule it.
     """
     household = await make_household(session)
-    anchor = await add_photo(session, household, sent_at=MARCH, described=False, message_type="text")
+    anchor = await add_photo(
+        session, household, sent_at=MARCH, described=False, message_type="text"
+    )
     await add_photo(session, household, sent_at=MARCH + timedelta(minutes=5), described=False)
     entry = await add_event(session, household, occurred_at=MARCH, sources=[anchor])
 
@@ -207,7 +211,9 @@ async def test_a_cited_photo_is_shown_even_when_penny_could_not_describe_it(
 @pytest.mark.db
 async def test_a_video_is_not_a_photograph(session: AsyncSession) -> None:
     household = await make_household(session)
-    anchor = await add_photo(session, household, sent_at=MARCH, described=False, message_type="text")
+    anchor = await add_photo(
+        session, household, sent_at=MARCH, described=False, message_type="text"
+    )
     await add_photo(session, household, sent_at=MARCH, message_type="video")
     entry = await add_event(session, household, occurred_at=MARCH, sources=[anchor])
 
@@ -247,7 +253,9 @@ async def test_an_uncited_photo_outside_the_window_is_not_picked_up(
     session: AsyncSession,
 ) -> None:
     household = await make_household(session)
-    anchor = await add_photo(session, household, sent_at=MARCH, described=False, message_type="text")
+    anchor = await add_photo(
+        session, household, sent_at=MARCH, described=False, message_type="text"
+    )
     await add_photo(session, household, sent_at=MARCH - timedelta(days=3))
     entry = await add_event(session, household, occurred_at=MARCH, sources=[anchor])
 
@@ -266,7 +274,9 @@ async def test_a_future_dated_appointment_still_finds_its_conversation(
     """
     household = await make_household(session)
     letter = await add_photo(session, household, sent_at=MARCH)
-    entry = await add_event(session, household, occurred_at=MARCH + timedelta(days=21), sources=[letter])
+    entry = await add_event(
+        session, household, occurred_at=MARCH + timedelta(days=21), sources=[letter]
+    )
 
     found = await photos_of(session, household, entry)
 
@@ -306,7 +316,9 @@ async def test_the_cap_holds_and_the_rest_are_counted_not_dropped(
     """Seven photographs, four shown, three named. A silent truncation in a medical record is the
     same failure `PendingReread` was built to prevent, one level down."""
     household = await make_household(session)
-    anchor = await add_photo(session, household, sent_at=MARCH, described=False, message_type="text")
+    anchor = await add_photo(
+        session, household, sent_at=MARCH, described=False, message_type="text"
+    )
     for minute in range(7):
         await add_photo(session, household, sent_at=MARCH + timedelta(minutes=minute + 1))
     entry = await add_event(session, household, occurred_at=MARCH, sources=[anchor])
@@ -322,11 +334,17 @@ async def test_one_photograph_belongs_to_exactly_one_entry(session: AsyncSession
     """A busy day makes several entries from one conversation and their windows overlap almost
     completely. Without this the same picture renders down five cards in a row."""
     household = await make_household(session)
-    anchor = await add_photo(session, household, sent_at=MARCH, described=False, message_type="text")
+    anchor = await add_photo(
+        session, household, sent_at=MARCH, described=False, message_type="text"
+    )
     picture = await add_photo(session, household, sent_at=MARCH + timedelta(minutes=10))
     first = await add_event(session, household, occurred_at=MARCH, sources=[anchor])
     second = await add_event(
-        session, household, occurred_at=MARCH + timedelta(minutes=30), sources=[anchor], title="Ate well"
+        session,
+        household,
+        occurred_at=MARCH + timedelta(minutes=30),
+        sources=[anchor],
+        title="Ate well",
     )
 
     found = await photo_rule.photos_for_page(session, household.id, [first.id, second.id])
@@ -344,16 +362,22 @@ async def test_the_entry_that_cited_a_photo_wins_it_from_the_entry_that_is_merel
     citing = await add_event(
         session, household, occurred_at=MARCH + timedelta(hours=6), sources=[picture]
     )
-    nearer = await add_event(session, household, occurred_at=MARCH, sources=[picture], title="Nearer")
+    nearer = await add_event(
+        session, household, occurred_at=MARCH, sources=[picture], title="Nearer"
+    )
     # `nearer` shares the source, so it is a candidate too and its `occurred_at` is closer.
     found = await photo_rule.photos_for_page(session, household.id, [citing.id, nearer.id])
 
-    holders = [eid for eid, ps in found.items() if any(p["message_id"] == picture.id for p in ps.photos)]
+    holders = [
+        eid for eid, ps in found.items() if any(p["message_id"] == picture.id for p in ps.photos)
+    ]
     assert len(holders) == 1
     # Both cite it, so the tiebreak is the stable one — never a coin flip between polls.
     assert holders[0] in {citing.id, nearer.id}
     again = await photo_rule.photos_for_page(session, household.id, [citing.id, nearer.id])
-    repeat = [eid for eid, ps in again.items() if any(p["message_id"] == picture.id for p in ps.photos)]
+    repeat = [
+        eid for eid, ps in again.items() if any(p["message_id"] == picture.id for p in ps.photos)
+    ]
     assert repeat == holders, "the same entry must win on every poll, or the photo flickers"
 
 
@@ -387,11 +411,17 @@ async def test_a_whole_page_costs_the_same_two_statements_as_one_entry(
     entries = []
     for day in range(12):
         anchor = await add_photo(
-            session, household, sent_at=MARCH + timedelta(days=day), described=False, message_type="text"
+            session,
+            household,
+            sent_at=MARCH + timedelta(days=day),
+            described=False,
+            message_type="text",
         )
         await add_photo(session, household, sent_at=MARCH + timedelta(days=day, minutes=5))
         entries.append(
-            await add_event(session, household, occurred_at=MARCH + timedelta(days=day), sources=[anchor])
+            await add_event(
+                session, household, occurred_at=MARCH + timedelta(days=day), sources=[anchor]
+            )
         )
 
     statements: list[str] = []
@@ -446,7 +476,9 @@ async def test_the_lightbox_endpoint_returns_everything_the_cap_hid(
     session: AsyncSession,
 ) -> None:
     household = await make_household(session)
-    anchor = await add_photo(session, household, sent_at=MARCH, described=False, message_type="text")
+    anchor = await add_photo(
+        session, household, sent_at=MARCH, described=False, message_type="text"
+    )
     for minute in range(7):
         await add_photo(session, household, sent_at=MARCH + timedelta(minutes=minute + 1))
     entry = await add_event(session, household, occurred_at=MARCH, sources=[anchor])
