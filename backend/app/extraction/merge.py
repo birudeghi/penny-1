@@ -219,6 +219,9 @@ async def merge_events(
             household_id=household_id,
             model=model,
             prompt_version=MERGE_PROMPT_VERSION,
+            # No `care_brief_hash`, deliberately: a merge is shown two events that extraction
+            # already decided were relevant, and never the brief. Copying the run's brief hash
+            # here to avoid a NULL would claim this call was filtered by something it never saw.
         )
     )
     merged = result.parsed

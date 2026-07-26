@@ -45,7 +45,7 @@ from app.extraction.chunker import (
 from app.extraction.dedup import compute_dedup_key
 from app.extraction.merge import merge_events
 from app.llm.gateway import CallSpec, ChunkTooLargeError, ContentFilteredError, LLMGateway
-from app.llm.prompts import EXTRACT_PROMPT, EXTRACT_PROMPT_VERSION
+from app.llm.prompts import EXTRACT_PROMPT, EXTRACT_PROMPT_VERSION, care_brief_hash
 from app.llm.schemas import ExtractedEvent, ExtractionResult, validate_against_transcript
 
 if TYPE_CHECKING:
@@ -329,6 +329,9 @@ class _Run:
     ) -> None:
         self.messages = messages
         self.care_brief = care_brief.strip()
+        # Once per run, off the same string every chunk renders, so every row this run writes
+        # names the one filter it ran under even when the household edits the brief mid-import.
+        self.care_brief_hash = care_brief_hash(self.care_brief)
         self.tz = tz
         self.gateway = gateway
         self.open_events = open_events
@@ -395,6 +398,7 @@ class _Run:
             reasoning_effort=EXTRACT_EFFORT,
             household_id=self.household_id,
             prompt_version=EXTRACT_PROMPT_VERSION,
+            care_brief_hash=self.care_brief_hash,
         )
         try:
             result = await self.gateway.structured(spec)

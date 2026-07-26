@@ -14,6 +14,7 @@ from app.llm.prompts import (
     EXTRACT_PROMPT_VERSION,
     MERGE_PROMPT,
     MERGE_PROMPT_VERSION,
+    care_brief_hash,
 )
 from app.llm.schemas import (
     ExtractedEvent,
@@ -217,3 +218,32 @@ def test_extract_prompt_states_the_rules_that_cost_us_money_when_forgotten() -> 
 def test_merge_prompt_forbids_losing_information() -> None:
     assert "Never delete information" in MERGE_PROMPT
     assert "DIFFERENT EVENTS:" in MERGE_PROMPT
+
+
+# --- the care brief's version -------------------------------------------------------------
+
+_BRIEF = "Care recipient: Margaret Doyle, 84.\nLog breathlessness, weight and any fall."
+
+
+def test_a_care_brief_hash_is_the_same_shape_as_a_prompt_version() -> None:
+    """The two are read side by side in one `llm_runs` row, so they share one convention."""
+    assert len(care_brief_hash(_BRIEF)) == len(EXTRACT_PROMPT_VERSION) == 12
+
+
+def test_a_care_brief_hash_carries_none_of_the_brief() -> None:
+    """The brief names a real person and their conditions; `llm_runs` is read casually."""
+    digest = care_brief_hash(_BRIEF)
+    for word in ("Margaret", "Doyle", "breathlessness", "fall"):
+        assert word.lower() not in digest
+
+
+def test_a_brief_that_differs_only_in_surrounding_whitespace_is_the_same_filter() -> None:
+    """Callers strip before rendering, so the trailing newline never reached the model — and a
+    brief someone re-saved without editing must not read as a new filter in the audit trail."""
+    assert care_brief_hash(f"\n  {_BRIEF}  \n") == care_brief_hash(_BRIEF)
+
+
+def test_one_added_instruction_changes_the_hash() -> None:
+    """The case the column exists for: the brief is what decides what counts as a care event,
+    so widening it must be visible in every run made afterwards."""
+    assert care_brief_hash(f"{_BRIEF}\nAlso log appetite.") != care_brief_hash(_BRIEF)

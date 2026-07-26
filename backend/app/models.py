@@ -299,6 +299,13 @@ class LlmRun(Base):
     status: Mapped[str] = mapped_column(sa.Text, nullable=False)
     model: Mapped[str] = mapped_column(sa.Text, nullable=False)
     prompt_version: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    # sha256(care brief)[:12]. Separate from prompt_version because the brief travels as call
+    # INPUT, not in the prompt file: without this column two runs made under completely
+    # different relevance filters are the same row to anyone reading the audit trail. NULL is
+    # a real answer — a merge run compares two events and is given no brief at all — so it is
+    # never backfilled with the household's current brief, which would date a run's filter to
+    # the day someone last edited it rather than the day the run happened.
+    care_brief_hash: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
     reasoning_effort: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
     # sha256(instructions||input)[:32] — identifies a repeated call without storing the prompt.
     request_fingerprint: Mapped[str | None] = mapped_column(sa.Text, nullable=True)

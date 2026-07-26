@@ -121,6 +121,12 @@ class CallSpec[T: BaseModel]:
     household_id: UUID | None = None
     model: str | None = None
     prompt_version: str | None = None
+    # The version of the care brief in `input`, when this call carries one. Two fields rather
+    # than one because they answer different questions — `prompt_version` is the same for every
+    # household on a deploy, `care_brief_hash` differs per household and changes whenever a
+    # family edits what Penny should be watching for. Left None by callers that genuinely have
+    # no brief (merge), never faked to keep the column full.
+    care_brief_hash: str | None = None
     # temperature / top_p intentionally absent: unrepresentable, therefore unsendable.
 
 
@@ -160,6 +166,7 @@ class LLMRunRecord:
     cost_usd: Decimal = Decimal("0")
     latency_ms: int = 0
     prompt_version: str | None = None
+    care_brief_hash: str | None = None
 
 
 class RunRecorder(Protocol):
@@ -473,6 +480,7 @@ class LLMGateway:
                 cost_usd=spend,
                 latency_ms=latency_ms,
                 prompt_version=spec.prompt_version,
+                care_brief_hash=spec.care_brief_hash,
             )
         )
 
