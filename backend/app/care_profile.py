@@ -35,7 +35,9 @@ by a filter that did not know the care recipient's name, so a family who backfil
 answering the interview has a record filtered against nothing. Comparing this hash on write is
 what decides whether to clear the cursor and re-read the history. It is deliberately NOT
 "any write to the profile" — a settings save that changes the timezone renders the same brief,
-hashes the same, and costs nothing.
+hashes the same, and costs nothing. `write_profile` is the only function that may write
+`households.care_profile`, because it is the only place that comparison happens: a profile
+stored by any other route sharpens the filter and never reaches the history it was meant to fix.
 
 VITALS ARE CLINICAL SAFETY DATA. `allergies` and `respect_form` are read by people making
 decisions in a hurry. A blank allergies line is honest and useful; a stale one is dangerous,
@@ -46,17 +48,21 @@ value. Penny does not decide these are still true — the family does, and the r
 from __future__ import annotations
 
 import hashlib
+import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import sqlalchemy as sa
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.models import Member
+from app.models import Member, Message
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from app.models import Household
+
+log = logging.getLogger(__name__)
 
 # Rendered into the brief when the interview has not run. It is deliberately not a name: a
 # plausible-looking placeholder ("Mum") would filter *something*, and filtering the wrong
@@ -286,6 +292,107 @@ async def build_brief(session: AsyncSession, household: Household) -> str:
         timezone=household.timezone,
         fallback_name=household.care_recipient_name,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class ProfileWrite:
+    """What one write did — and specifically whether it cost the family anything.
+
+    `brief_changed` is NOT "the profile was edited". It is "the rendered brief, and therefore
+    the filter, differs from the one the stored hash was taken from". An interview that
+    re-captures the same three conditions in a different order edits the profile and changes
+    nothing here. Callers report progress off this, and a write that claims a change it did not
+    make tells a family their history is being re-read when nothing of the sort is happening.
+    """
+
+    brief_changed: bool
+    # How many messages went back onto the extraction cursor: the size of the re-read the next
+    # run will do, and of the bill it will draw against a $15/month pot. Zero when the brief did
+    # not change, and zero on a first write for a household that has never extracted anything.
+    messages_recalled: int = 0
+
+
+async def write_profile(
+    session: AsyncSession, household: Household, profile: CareProfile
+) -> ProfileWrite:
+    """THE ONE DOOR onto `households.care_profile`. Clears the cursor iff the filter changed.
+
+    `messages.extracted_at IS NULL` is the extraction cursor and a stamped message is never
+    reconsidered, so a sharpened profile does nothing for the past on its own. The case this
+    exists for is the ordinary one: a family uploads six months of export on day one and
+    answers the interview on day three, so every one of those messages was judged by a brief
+    that did not know the care recipient's name. Clearing `extracted_at` is how the sharpened
+    filter reaches them.
+
+    WHY THE HASH AND NOT "THE PROFILE WAS WRITTEN". Clearing on every write would make the
+    settings page expensive: a timezone correction, or the interview re-confirming what it
+    already knew, would re-read and re-bill a household's entire history for a filter that is
+    byte-for-byte the one that already ran. `brief_hash` is over the rendered profile lines
+    only (see the module docstring), so it moves exactly when the model's instructions move.
+
+    ORDER MATTERS AT THE CALL SITE. The hash includes `households.care_recipient_name` as the
+    fallback name, which means renaming the care recipient can change the filter as much as
+    editing the profile does — for a household whose interview has not run, it IS the filter.
+    So a caller that changes that column must assign it BEFORE calling this. Hashing first
+    renders the OLD brief, matches the stored hash, and leaves the history filtered by a
+    placeholder with nothing anywhere to record that it happened.
+
+    THE FIRST WRITE IS NOT SPECIAL-CASED, deliberately. A stored hash of NULL means no brief
+    was ever rendered, and the tempting reading — "nothing to re-read, skip it" — is wrong for
+    precisely the import-then-interview case above, where the first profile write is the one
+    that matters most. The `extracted_at IS NOT NULL` clause is what makes it free instead: a
+    household that has never extracted anything matches no rows, and `messages_recalled` is 0.
+
+    RE-READING IS SAFE, only expensive. `extraction.persist` leaves edited and deleted events
+    exactly as they are and `extraction.merge` never drops information, so a second pass over
+    the same messages cannot overwrite what a family corrected or resurrect what they deleted.
+    The only thing at stake here is money, which is why the hash comparison is worth having.
+
+    TWO KNOWN, ACCEPTED CONSEQUENCES of clearing under a household that is busy. An extraction
+    run already in flight holds the advisory lock and will stamp the ids it read before this
+    ran, so a slice of the recall can be re-stamped and missed; the answer is a later edit or a
+    re-run, not a lock taken here, because holding the extraction lock across a settings save
+    would make the settings page wait on an OpenAI call. And the import progress bar counts
+    stamped messages (`routers.imports._extracted_count`), so a profile saved mid-import makes
+    it jump backwards — which is the truth: there really is that much left to read again.
+
+    Never commits: `app.db.get_session` owns the transaction, so the profile, the hash and the
+    cursor clear land together or not at all. A partial write is the one outcome with no way
+    back — a stored hash whose clear never ran can never be noticed again.
+    """
+    new_hash = brief_hash(profile, fallback_name=household.care_recipient_name)
+    # Written on both paths. An unchanged brief still means the family said something (a
+    # rephrased note, a vital re-confirmed today), and refusing to store it because the model
+    # will read it the same way would silently discard an edit they watched themselves make.
+    household.care_profile = profile.model_dump(mode="json")
+
+    if new_hash == household.care_brief_hash:
+        return ProfileWrite(brief_changed=False)
+
+    household.care_brief_hash = new_hash
+    result = await session.execute(
+        sa.update(Message)
+        .where(
+            # The tenant key, on the write as much as on the read. Without it this statement is
+            # every household's history, re-read and re-billed, from one family's edit.
+            Message.household_id == household.id,
+            # Only rows that are actually on the far side of the cursor. Restating NULL as NULL
+            # is a no-op that still counts in `rowcount`, and the count is what the caller
+            # reports to the family as "how much is being re-read".
+            Message.extracted_at.isnot(None),
+        )
+        .values(extracted_at=None)
+    )
+    recalled = result.rowcount or 0
+    # Ids and counts. The profile itself is the care recipient's medical detail and never goes
+    # near a log line; `messages_recalled` is the operational number worth having, because it
+    # is the one that predicts the next extraction bill.
+    log.info(
+        "care_profile brief changed household=%s messages_recalled=%d",
+        household.id,
+        recalled,
+    )
+    return ProfileWrite(brief_changed=True, messages_recalled=recalled)
 
 
 def _describe(profile: CareProfile) -> str:

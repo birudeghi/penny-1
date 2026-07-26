@@ -226,16 +226,43 @@ The session probe the app boots on.
 
 ### `PATCH /api/household`
 
-All fields optional; send only what changed.
+All fields optional; send only what changed. Omitted and `null` are different: an omitted field
+leaves the stored value alone.
 
 ```json
-{ "name": "The Shaws", "care_recipient_name": "Margaret", "timezone": "Europe/London" }
+{
+  "name": "The Shaws",
+  "care_recipient_name": "Margaret",
+  "timezone": "Europe/London",
+  "care_profile": {
+    "name": "Margaret Shaw",
+    "aliases": ["Mum", "Nan"],
+    "age": 84,
+    "place": "Croydon",
+    "conditions": ["Heart failure"],
+    "medications": ["Ramipril 2.5mg"],
+    "providers": ["Dr Aziz"],
+    "allergies": { "value": "Penicillin", "confirmed_at": "2026-07-25" },
+    "notes": "Prefers appointments in the morning"
+  }
+}
 ```
 
 **200** returns the same `household` object as `GET /api/me`.
 
 - **422** — `{"detail": "'Europe/Londn' is not a known timezone."}`. Validated against
   `zoneinfo.available_timezones()` on write.
+
+`care_profile` is sent WHOLE, not per-field: omitting `aliases` and clearing `aliases` would
+otherwise be the same request. Lists are de-duplicated case-insensitively, sorted and capped
+server-side, so what comes back out is not always byte-identical to what went in.
+
+**It is the one field on this endpoint that can cost money.** The profile is the specification
+extraction filters by, so a save that changes the rendered brief clears `messages.extracted_at`
+for the household and the next extraction run re-reads its entire history against the sharper
+filter. Saves that do not change the brief — a timezone, a household rename, the same answers
+in a different order, a care recipient rename once the profile carries its own `name` — are
+free. See `app/care_profile.py`.
 
 ### `POST /api/household/password`
 

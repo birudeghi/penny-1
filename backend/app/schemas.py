@@ -27,6 +27,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, ValidationError
 
+from app.care_profile import CareProfile
 from app.extraction.runner import normalise_precision
 
 logger = logging.getLogger(__name__)
@@ -352,6 +353,15 @@ class HouseholdPatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     care_recipient_name: str | None = Field(default=None, min_length=1, max_length=200)
     timezone: str | None = None
+    # `CareProfile` itself, not a restatement of it. Its caps and its list-cleaning are what
+    # keep the brief hash stable, and a parallel schema here would be a second set of rules to
+    # keep in step — with a failure mode that is invisible until a profile saved through the
+    # API hashes differently from the identical one saved by the interview.
+    #
+    # WHOLE-OBJECT, not per-field: the profile is one specification of what counts as relevant,
+    # and a partial write would mean "aliases omitted" and "aliases cleared" arrive as the same
+    # request. Clearing aliases has to be possible, and it has to be deliberate.
+    care_profile: CareProfile | None = None
 
 
 class PasswordChange(BaseModel):
