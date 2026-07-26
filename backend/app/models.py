@@ -102,6 +102,24 @@ class Household(Base):
     session_version: Mapped[int] = mapped_column(
         sa.Integer, nullable=False, server_default=sa.text("1"), default=1
     )
+    # THE RELEVANCE SPECIFICATION. What the onboarding interview establishes and what
+    # extraction filters by: the care recipient's name and the aliases the family actually
+    # types, her conditions, medications, clinicians, and the four vitals a clinician reads
+    # first. Shape and rendering live in `app/care_profile.py`; JSONB rather than columns
+    # because the interview will keep learning fields and each one must not be a migration.
+    #
+    # `care_recipient_name` above stays: it is NOT NULL, it holds the onboarding placeholder,
+    # and it is the fallback the brief renders when the interview has not run yet.
+    care_profile: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=sa.text("'{}'::jsonb"), default=dict
+    )
+    # sha256 of the RENDERED brief, first 32 chars. `messages.extracted_at IS NULL` is the
+    # extraction cursor and a stamped message is never reconsidered, so a sharpened profile
+    # would never reach the history it was meant to fix. Comparing this on write is what
+    # decides to clear the cursor — and hashing the rendered string rather than a list of
+    # fields is what stops a newly added field being silently left out of that comparison.
+    # NULL means "never rendered", which is not the same as "rendered to nothing".
+    care_brief_hash: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
     created_at: Mapped[datetime] = _created_at()
     updated_at: Mapped[datetime] = _updated_at()
 

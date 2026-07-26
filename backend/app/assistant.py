@@ -48,14 +48,14 @@ from zoneinfo import ZoneInfo
 import sqlalchemy as sa
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.config import get_settings
-
 # `_HouseholdBudget` is private to the extraction service by name only: it is a `BudgetGuard`
 # over `llm_runs.cost_usd` for one household, and a chat reply spends from the same $15/month
 # pot as everything else — which is what stops a mention loop in a busy group becoming a bill.
 # Reusing it beats a second copy of the 30-day window arithmetic that could drift from the one
 # the import path enforces.
-from app.extraction.service import _HouseholdBudget, build_care_brief
+from app.care_profile import build_brief
+from app.config import get_settings
+from app.extraction.service import _HouseholdBudget
 from app.llm.gateway import CallSpec, LLMGateway, Purpose
 from app.llm.recorder import DbRunRecorder
 from app.models import Event, Message
@@ -269,7 +269,7 @@ async def build_mention_context(session: AsyncSession, household: Household) -> 
     return MentionContext(
         timezone=household.timezone,
         today=now.astimezone(tz).strftime("%Y-%m-%d (%A)"),
-        care_brief=await build_care_brief(session, household),
+        care_brief=await build_brief(session, household),
         events=await _recent_events(session, household.id, tz, now),
         messages=await _recent_messages(session, household.id, tz),
     )

@@ -1,0 +1,216 @@
+"""The relevance specification, and the hash that decides when it changed enough to matter.
+
+The expensive thing in this file is `brief_hash`. A hash that changes when it should not
+re-reads a household's entire history and bills it against a $15/month pot; a hash that does
+not change when it should leaves six months of chat filtered by a placeholder, and the family
+sees a thin record rather than an error. Both failures are silent, so both get tests that
+state the rule in their name.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from app import care_profile as cp
+
+# --- the renderer ---------------------------------------------------------------------
+
+
+def _full() -> cp.CareProfile:
+    return cp.CareProfile(
+        name="Juno Alden",
+        aliases=["Mum", "Nan"],
+        age=84,
+        place="Croydon",
+        conditions=["Heart failure", "Hypertension"],
+        medications=["Ramipril 2.5mg"],
+        providers=["Dr Chen"],
+        allergies=cp.Vital(value="Penicillin", confirmed_at="2026-07-25"),
+    )
+
+
+def test_the_brief_names_her_and_the_words_the_family_actually_types() -> None:
+    """Aliases are the point of this file: "Mum" is what appears in the chat, not "Juno"."""
+    brief = cp.render_brief(_full(), participants=["Liz"], timezone="Europe/London")
+    assert "Care recipient: Juno Alden." in brief
+    assert "Mum and Nan" in brief
+    assert '"she"/"her"' in brief
+
+
+def test_an_empty_profile_still_renders_a_usable_brief() -> None:
+    """Before the interview runs there is still a household, and extraction still runs."""
+    brief = cp.render_brief(cp.CareProfile(), participants=[], timezone="Europe/London")
+    assert cp.UNKNOWN in brief
+    assert "People in this chat: unknown." in brief
+    assert "Household timezone: Europe/London." in brief
+
+
+def test_the_placeholder_name_is_used_only_until_the_profile_has_one() -> None:
+    """`households.care_recipient_name` is NOT NULL and holds a placeholder; the profile wins."""
+    empty = cp.render_brief(
+        cp.CareProfile(), participants=[], timezone="UTC", fallback_name="the placeholder"
+    )
+    assert "Care recipient: the placeholder." in empty
+
+    named = cp.render_brief(
+        cp.CareProfile(name="Juno"), participants=[], timezone="UTC", fallback_name="placeholder"
+    )
+    assert "Care recipient: Juno." in named
+    assert "placeholder" not in named
+
+
+def test_absent_vitals_are_omitted_rather_than_printed_as_unknown() -> None:
+    """Prompt weight for no signal. The web UI does the opposite, deliberately."""
+    brief = cp.render_brief(cp.CareProfile(name="Juno"), participants=[], timezone="UTC")
+    assert "Allergies" not in brief
+    assert "NHS number" not in brief
+
+
+def test_a_vital_carries_the_date_a_human_last_confirmed_it() -> None:
+    """A stale allergies line is more dangerous than a missing one, so the date rides along."""
+    brief = cp.render_brief(_full(), participants=[], timezone="UTC")
+    assert "Allergies: Penicillin (confirmed 2026-07-25)." in brief
+
+
+# --- list cleaning --------------------------------------------------------------------
+
+
+def test_cleaned_lists_do_not_depend_on_the_order_the_answers_arrived_in() -> None:
+    """THE hash-stability test. Same answers, any order, same stored value.
+
+    A family types "Nan" one week and "nan" the next. Keeping whichever spelling arrived
+    first would make the stored value a function of message order, so re-capturing the same
+    answers in a different sequence would hash differently and bill them for a re-read that
+    changed nothing.
+    """
+    assert cp.CareProfile(aliases=["  nan ", "Mum", "MUM", "Nan"]).aliases == ["MUM", "Nan"]
+    assert cp.CareProfile(aliases=["Nan", "mum", "MUM", "nan"]).aliases == ["MUM", "Nan"]
+
+    a = cp.CareProfile(name="J", conditions=["Heart failure", "hypertension", "Hypertension"])
+    b = cp.CareProfile(name="J", conditions=["Hypertension", "Heart failure", "hypertension"])
+    assert a.conditions == b.conditions
+    assert cp.brief_hash(a) == cp.brief_hash(b)
+
+
+def test_list_fields_are_capped_so_one_pasted_essay_cannot_eat_the_chunk() -> None:
+    profile = cp.CareProfile(conditions=[f"condition {i}" for i in range(50)])
+    assert len(profile.conditions) == cp.MAX_LIST_ITEMS
+
+
+def test_empty_and_whitespace_only_entries_are_dropped() -> None:
+    assert cp.CareProfile(medications=["", "   ", "Ramipril"]).medications == ["Ramipril"]
+
+
+# --- the hash: what MUST change it ----------------------------------------------------
+
+
+def test_the_same_profile_hashes_the_same() -> None:
+    assert cp.brief_hash(_full()) == cp.brief_hash(_full())
+
+
+def test_a_new_condition_changes_the_hash() -> None:
+    """A sharpened filter must reach the history it was meant to fix."""
+    before = cp.brief_hash(_full())
+    after = _full()
+    after.conditions = [*after.conditions, "Osteoarthritis"]
+    assert cp.brief_hash(after) != before
+
+
+def test_learning_her_name_changes_the_hash() -> None:
+    """The placeholder-to-real transition is the whole reason the cursor gets cleared."""
+    placeholder = cp.brief_hash(cp.CareProfile(), fallback_name="not yet known")
+    named = cp.brief_hash(cp.CareProfile(name="Juno Alden"))
+    assert placeholder != named
+
+
+def test_a_new_alias_changes_the_hash() -> None:
+    """Aliases decide pronoun resolution, so they decide what got extracted."""
+    before = cp.brief_hash(cp.CareProfile(name="Juno", aliases=["Mum"]))
+    after = cp.brief_hash(cp.CareProfile(name="Juno", aliases=["Mum", "Nan"]))
+    assert before != after
+
+
+def test_a_vital_changes_the_hash() -> None:
+    before = cp.brief_hash(cp.CareProfile(name="Juno"))
+    after = cp.brief_hash(cp.CareProfile(name="Juno", allergies=cp.Vital(value="Penicillin")))
+    assert before != after
+
+
+# --- the hash: what MUST NOT change it ------------------------------------------------
+
+
+def test_reordering_aliases_does_not_change_the_hash() -> None:
+    """Same three answers in a different order is not a changed filter, and must not re-bill."""
+    a = cp.brief_hash(cp.CareProfile(name="Juno", aliases=["Mum", "Nan", "Gran"]))
+    b = cp.brief_hash(cp.CareProfile(name="Juno", aliases=["Gran", "Mum", "Nan"]))
+    assert a == b
+
+
+def test_reordering_conditions_does_not_change_the_hash() -> None:
+    a = cp.brief_hash(cp.CareProfile(name="J", conditions=["Heart failure", "Hypertension"]))
+    b = cp.brief_hash(cp.CareProfile(name="J", conditions=["Hypertension", "Heart failure"]))
+    assert a == b
+
+
+@pytest.mark.parametrize("timezone", ["Europe/London", "America/New_York", "UTC"])
+def test_the_timezone_never_changes_the_hash(timezone: str) -> None:
+    """THE settings-page test. Somebody fixing a timezone typo must not re-bill six months.
+
+    The timezone IS in the brief — the model needs it to resolve "yesterday" — but it is
+    appended by `render_brief` after the hashed lines, precisely so that this holds.
+    """
+    profile = _full()
+    assert cp.brief_hash(profile) == cp.brief_hash(_full())
+    brief = cp.render_brief(profile, participants=["Liz"], timezone=timezone)
+    assert f"Household timezone: {timezone}." in brief
+
+
+def test_a_new_member_joining_the_chat_does_not_change_the_hash() -> None:
+    """Participants are context, not specification. A cousin joining is not a new filter."""
+    profile = _full()
+    before = cp.brief_hash(profile)
+    small = cp.render_brief(profile, participants=["Liz"], timezone="UTC")
+    large = cp.render_brief(profile, participants=["Liz", "Owen", "Yuval"], timezone="UTC")
+    assert small != large  # the brief changed
+    assert cp.brief_hash(profile) == before  # the hash did not
+
+
+# --- the regression the eng review flagged CRITICAL -----------------------------------
+
+
+def test_extraction_and_the_assistant_render_byte_identical_briefs() -> None:
+    """REGRESSION (eng review T14). `build_care_brief` moved out of extraction/service.py.
+
+    Both modules used to format their own `<care_brief>` block. Drift between them is silent
+    and specific: extraction filters for one person while the assistant answers about another,
+    and no test fails. There is one renderer now, and this asserts both doors reach it.
+    """
+    import app.assistant as assistant_module
+    import app.extraction.service as extraction_module
+
+    # Both doors must resolve to the ONE renderer. Asserting on identity rather than on
+    # output is what makes this a regression test: a second implementation that happens to
+    # produce the same string today would pass an output comparison and drift tomorrow.
+    assert extraction_module.care_profile.build_brief is cp.build_brief
+    assert assistant_module.build_brief is cp.build_brief
+
+
+def test_a_malformed_stored_profile_is_treated_as_absent_not_fatal() -> None:
+    """One bad row must not take down extraction, the assistant and the feed together."""
+
+    class _Household:
+        care_profile = {"aliases": "not a list", "age": "eighty-four"}
+
+    assert cp.load(_Household()).name is None  # type: ignore[arg-type]
+
+    class _Worse:
+        care_profile = ["not", "a", "dict"]
+
+    assert cp.load(_Worse()).name is None  # type: ignore[arg-type]
+
+
+def test_is_established_turns_true_on_a_name_alone() -> None:
+    """A name is what turns "she" into a person; everything else only sharpens."""
+    assert not cp.CareProfile().is_established()
+    assert not cp.CareProfile(conditions=["Heart failure"]).is_established()
+    assert cp.CareProfile(name="Juno").is_established()

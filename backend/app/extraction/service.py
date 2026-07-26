@@ -65,13 +65,14 @@ from zoneinfo import ZoneInfo
 
 import sqlalchemy as sa
 
+from app import care_profile
 from app.config import get_settings
 from app.extraction.chunker import OVERLAP_MESSAGES, ChunkMessage
 from app.extraction.persist import persist_extraction
 from app.extraction.runner import OPEN_EVENTS_LIMIT, OpenEvent, extract_messages
 from app.llm.gateway import BudgetExceededError, LLMGateway
 from app.llm.recorder import DbRunRecorder
-from app.models import Event, Household, LlmRun, Member, Message
+from app.models import Event, Household, LlmRun, Message
 from app.transcription import AUDIO_MESSAGE_TYPES, DOWNLOADABLE_PROVIDER, TRANSCRIBED_MARKER
 
 if TYPE_CHECKING:
@@ -243,29 +244,18 @@ async def run_extraction_for_household(
 async def build_care_brief(session: AsyncSession, household: Household) -> str:
     """The block that turns "she" into a name.
 
-    Two facts, both of which the database actually knows: who this household is caring for,
-    and who talks in the chat. Naming the care recipient is what stops the model extracting
-    Priya's dentist appointment and Alfie's temperature as care events — the fixture's five
-    planted distractors are all "a symptom, but not hers".
+    MOVED. The brief is now owned by `app.care_profile`, which holds the schema, the one
+    renderer, and the hash that decides when a changed profile is worth re-reading the
+    history for. This wrapper stays because extraction is not the only consumer and a name
+    two other modules import should not vanish in the same change that moves it.
+
+    Naming the care recipient is what stops the model extracting Priya's dentist appointment
+    and Alfie's temperature as care events — the fixture's five planted distractors are all
+    "a symptom, but not hers". The profile makes that filter sharper: aliases are what the
+    family actually types, and "Mum" resolving to a person is the difference between
+    filtering a chat and filtering nothing.
     """
-    names = (
-        (
-            await session.execute(
-                sa.select(Member.display_name)
-                .where(Member.household_id == household.id)
-                .order_by(Member.display_name)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    people = ", ".join(name for name in names if name) or "unknown"
-    return (
-        f"Care recipient: {household.care_recipient_name}. Messages about anyone else are not "
-        "care events unless that person is the actor.\n"
-        f"People in this chat: {people}.\n"
-        f"Household timezone: {household.timezone}."
-    )
+    return await care_profile.build_brief(session, household)
 
 
 # --- the cadence gate -----------------------------------------------------------------
