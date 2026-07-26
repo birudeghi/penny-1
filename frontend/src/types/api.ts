@@ -115,10 +115,40 @@ export type NoteEvent = EventBase & { kind: 'note'; details: NoteDetails }
  */
 export type Event = SymptomEvent | AppointmentEvent | MedicationEvent | NoteEvent
 
+/**
+ * What Penny has ingested and has NOT yet read, on `GET /api/feed`. Null when caught up.
+ *
+ * A stretch of history Penny has not read yet renders exactly like a stretch where nothing
+ * happened — both are an absence of cards — and one of those is a lie about a medical record.
+ * Re-extraction is started by clearing `messages.extracted_at` (the onboarding interview clears
+ * the whole household's, so a corrected care filter reaches old history) and the monthly budget
+ * aborts it mid-flight by design, so a half-read feed is an expected state rather than a bug.
+ * Nothing in the event list can correct the impression it leaves, because the missing events are
+ * missing; only this can.
+ *
+ * The bounds are the outer edges of the UNREAD messages, not of the household's history. They
+ * are also not a watermark: the unread set can have holes in it (a voice note still waiting on
+ * its transcript stays unstamped for a few minutes), so this must never be rendered as
+ * "everything after `last_sent_at` has been read" — a reassurance the server cannot support.
+ */
+export interface PendingReread {
+  message_count: number
+  first_sent_at: string
+  last_sent_at: string
+}
+
 /** `GET /api/feed`. `next_before` is null when there is no next page. */
 export interface FeedPage {
   events: Event[]
   next_before: string | null
+  /**
+   * Optional in TYPE only, and never optional on the wire: the backend always sends the key,
+   * with an explicit `null` when the household is caught up. It is declared optional here for
+   * the same reason `WhatsappStatus.gowa_available` is — so the offline fixture server and any
+   * response minted before the field existed still typecheck — and `?? null` at the read site
+   * is what collapses the two absences back into one meaning.
+   */
+  pending_reread?: PendingReread | null
 }
 
 /** `GET /api/upcoming` — "upcoming" is a query (`occurred_at > now()`), not an entity. */

@@ -282,11 +282,89 @@ def to_event(row: Any, actor_display_name: str | None = None) -> Any:
 # --- feed ---------------------------------------------------------------------------------
 
 
+class PendingReread(BaseModel):
+    """The stretch of conversation Penny has ingested but has NOT yet read, said out loud.
+
+    THE FAILURE THIS PREVENTS. `messages.extracted_at` is the extraction cursor: NULL means
+    "not yet fed to the model". Re-extraction is triggered by clearing it — the onboarding
+    interview corrects the care profile and clears the whole household's cursor so the improved
+    filter reaches the history that was read under the old one. That re-read costs money, and
+    the monthly budget aborts it MID-FLIGHT by design, leaving the cursor part-drained and the
+    rest to be picked up by a later tick.
+
+    While that is true the feed is a mixture: some of it read under the corrected filter, some
+    of it not read yet at all. And a stretch Penny has not read is INDISTINGUISHABLE ON SCREEN
+    from a stretch where nothing happened. Both are simply an absence of cards. A family looking
+    at last March and seeing nothing concludes that nothing was recorded in March — which is the
+    exact "lost the thread" failure this product exists to prevent, arriving through the
+    mechanism built to fix it. Nothing in the event stream can correct that impression, because
+    the missing events are missing; only a statement about the CURSOR can.
+
+    So this object is a statement about the cursor, not about events: how many messages are
+    waiting, and the span of real time they were sent across. It is derived on every read from
+    `extracted_at IS NULL` and there is no column behind it — a stored flag would need clearing
+    by every one of the four things that stamp the cursor, and the one that forgot would leave a
+    banner up forever on a household with nothing left to read.
+
+    WHY A RANGE AND A COUNT RATHER THAN "everything before X". The unread set is not guaranteed
+    contiguous. Voice notes waiting on a transcript are deliberately left NULL for a few minutes
+    while the words are fetched, so a household mid-re-read can hold a handful of unread
+    messages from yesterday and thousands from last March at the same time. A count plus the
+    outer bounds is the strongest claim that is true of every possible shape of that set; "we
+    have read everything after 4 March" would be a claim we cannot support, and a wrong
+    reassurance is worse than no reassurance in a record a family makes decisions from.
+    """
+
+    # How many messages are still waiting. A number, never a list of ids: the client's job is
+    # to say "there is more here than you can see", not to enumerate a family's chat.
+    message_count: int
+    # The `sent_at` bounds of exactly those messages. NOT the household's whole history — the
+    # point of the banner is to name the part that is missing, and naming the whole history
+    # would say "all of this is unread" the moment one old message came back into the set.
+    first_sent_at: UtcDatetime
+    last_sent_at: UtcDatetime
+
+    @classmethod
+    def from_aggregate(
+        cls,
+        message_count: int,
+        first_sent_at: datetime | None,
+        last_sent_at: datetime | None,
+    ) -> PendingReread | None:
+        """Build one from a `COUNT/MIN/MAX` row, or `None` when there is nothing to say.
+
+        The empty case is the overwhelmingly common one — a household that is fully caught up
+        is the steady state — so it gets the cheapest possible representation and the client
+        gets one `null` check rather than a zero it has to remember to treat as absence.
+
+        The `None` bounds guard is not defensive noise about SQL. `MIN`/`MAX` are NULL exactly
+        when `COUNT` is zero, so in the query this class is fed by the two can never disagree.
+        It is here because this constructor is the one place a future caller could feed the two
+        halves from different queries, and the honest answer to "there are 40 unread messages
+        but I do not know when they were sent" is to say nothing at all rather than to render a
+        banner with an empty date range in it, which reads as a bug and destroys the trust the
+        banner exists to protect.
+        """
+        if message_count <= 0 or first_sent_at is None or last_sent_at is None:
+            return None
+        return cls(
+            message_count=message_count,
+            first_sent_at=first_sent_at,
+            last_sent_at=last_sent_at,
+        )
+
+
 class FeedPage(BaseModel):
     events: list[AnyEvent]
     # The `occurred_at` of the last event returned, or null when there is no next page. The
     # client stops paginating on null; returning the cursor unconditionally makes it loop.
     next_before: UtcDatetime | None = None
+    # Null when the household is caught up. ALWAYS PRESENT AS A KEY, including on later pages:
+    # a field that appears only when there is something to report trains a client to treat
+    # "absent" as "unknown", and the one place that matters is the page where it is absent
+    # because everything has been read. Explicit `null` is the difference between "caught up"
+    # and "this response predates the field".
+    pending_reread: PendingReread | None = None
 
 
 class UpcomingPage(BaseModel):
