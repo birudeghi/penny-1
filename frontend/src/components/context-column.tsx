@@ -50,31 +50,7 @@ export function ContextColumn({
       <ProfileList label="Medications" items={profile?.medications ?? []} />
       <ProfileList label="Living with" items={profile?.conditions ?? []} />
 
-      <section>
-        <PanelLabel>Coming up</PanelLabel>
-        <div className="mt-4 space-y-3.5">
-          {upcoming === undefined && <p className="text-[13px] text-muted-foreground">Loading…</p>}
-          {/* Nothing booked is the ordinary state of most weeks, not a failure to load. */}
-          {upcoming?.length === 0 && (
-            <p className="text-[13px] text-muted-foreground">Nothing scheduled.</p>
-          )}
-          {upcoming?.map((event) => (
-            // Order comes from the API, ascending. Re-sorting here would only hide a backend bug.
-            <div key={event.id} className="flex gap-2.5">
-              <span className="mt-0.5">
-                <KindNode kind={timelineKind(event)} size="sm" />
-              </span>
-              <div className="min-w-0">
-                <div className="text-[13.5px] leading-snug font-medium">{event.title}</div>
-                <div className="mt-0.5 text-[12.5px] text-muted-foreground">
-                  {countdown(event.occurred_at, timeZone)} ·{' '}
-                  {formatOccurredAt(event.occurred_at, event.occurred_at_precision, timeZone)}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
+      <UpcomingPanel upcoming={upcoming} timeZone={timeZone} />
 
       {people.all.length > 0 && (
         <section>
@@ -257,20 +233,73 @@ function countdown(iso: string, timeZone: string, now = new Date()): string {
  * the page is for and stacking the full column on top would push the first entry off the screen
  * on every visit.
  *
- * "Coming up" is not repeated here. It is the one block whose desktop job — sitting level with a
- * timeline you are scrolling past — has no phone equivalent, and its content is upcoming
- * appointments which are also entries in the record itself.
+ * "COMING UP" IS HERE TOO, and it did not used to be. The argument for leaving it out was that
+ * its desktop job — sitting level with a timeline you scroll past — has no phone equivalent, and
+ * that an upcoming appointment is also an entry in the record. The second half of that stopped
+ * being true when `/api/feed` was bounded to `occurred_at <= now()`: the record is the past now,
+ * so this is the ONLY place a booking appears. Dropping it on a phone would have deleted next
+ * week's district nurse from the device the family actually reads.
  */
+/**
+ * Everything booked that has not happened yet — and since `/api/feed` was bounded to the past,
+ * the ONLY place a future appointment appears at all.
+ *
+ * Shared by the rail and the phone layout rather than written twice. The desktop copy used to be
+ * inline in `ContextColumn`; extracting it is what let the phone have one without a second
+ * implementation to keep in step.
+ */
+export function UpcomingPanel({
+  upcoming,
+  timeZone,
+}: {
+  upcoming: Event[] | undefined
+  timeZone: string
+}) {
+  return (
+    <section>
+      <PanelLabel>Coming up</PanelLabel>
+      <div className="mt-4 space-y-3.5">
+        {upcoming === undefined && <p className="text-[13px] text-muted-foreground">Loading…</p>}
+        {/* Nothing booked is the ordinary state of most weeks, not a failure to load. */}
+        {upcoming?.length === 0 && (
+          <p className="text-[13px] text-muted-foreground">Nothing scheduled.</p>
+        )}
+        {upcoming?.map((event) => (
+          // Order comes from the API, ascending. Re-sorting here would only hide a backend bug.
+          <div key={event.id} className="flex gap-2.5">
+            <span className="mt-0.5">
+              <KindNode kind={timelineKind(event)} size="sm" />
+            </span>
+            <div className="min-w-0">
+              <div className="text-[13.5px] leading-snug font-medium">{event.title}</div>
+              <div className="mt-0.5 text-[12.5px] text-muted-foreground">
+                {countdown(event.occurred_at, timeZone)} ·{' '}
+                {formatOccurredAt(event.occurred_at, event.occurred_at_precision, timeZone)}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+
 export function MobileFacts({
   profile,
+  upcoming,
+  timeZone,
   className = '',
 }: {
   profile: CareProfileFacts | undefined
+  upcoming: Event[] | undefined
+  timeZone: string
   className?: string
 }) {
   return (
-    <div className={`lg:hidden ${className}`}>
+    <div className={`space-y-7 lg:hidden ${className}`}>
       <VitalsBand profile={profile} />
+      <UpcomingPanel upcoming={upcoming} timeZone={timeZone} />
     </div>
   )
 }

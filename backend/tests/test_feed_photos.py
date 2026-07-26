@@ -396,7 +396,7 @@ async def test_a_whole_page_costs_the_same_two_statements_as_one_entry(
 
     statements: list[str] = []
 
-    def record(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001, ARG001
+    def record(conn, cursor, statement, parameters, context, executemany):
         statements.append(statement)
 
     engine = session.get_bind()

@@ -74,7 +74,12 @@ export function FeedRoute() {
             />
           )}
 
-          <MobileFacts profile={household?.care_profile} className="mb-8" />
+          <MobileFacts
+            profile={household?.care_profile}
+            upcoming={upcoming.data?.events}
+            timeZone={timeZone}
+            className="mb-8"
+          />
 
           <div className="flex min-w-0 gap-14">
             <div className="min-w-0 flex-1">

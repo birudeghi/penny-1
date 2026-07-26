@@ -137,8 +137,25 @@ async def get_feed(
         # bug nobody reports because the row never shows up to be doubted.
         select(Event, Member.display_name)
         .outerjoin(Member, Event.actor_member_id == Member.id)
-        .where(Event.household_id == ctx.id, Event.deleted_at.is_(None))
-        .order_by(Event.occurred_at.desc(), Event.id.desc())
+        .where(
+            Event.household_id == ctx.id,
+            Event.deleted_at.is_(None),
+            # THE PAST ONLY. The nav calls this History and `/api/upcoming` is the other half of
+            # the same split (`occurred_at > now()`), so without this bound a future appointment
+            # appeared TWICE — pinned above today at the top of the history, and again under
+            # "Coming up". Sorting newest-first puts the furthest-away booking highest, so the
+            # first thing a family saw scrolling their record was something that had not
+            # happened yet. Nothing is lost by excluding it: the same row is the upcoming query.
+            Event.occurred_at <= sa.func.now(),
+        )
+        # `created_at`, NOT `id`, as the tiebreak. Event ids are `uuid4` (models.py:54) — random,
+        # not time-ordered — so `id DESC` shuffles every event that shares a timestamp. Day- and
+        # week-precision events ALL share one: they are stamped midnight, so a day on which a
+        # family reported a fall, then a temperature, then a hospital trip came back in an order
+        # with no relationship to the order they said it. `created_at` is when Penny recorded it,
+        # which for a day-precision event is the only ordering signal that exists. `id` stays as
+        # the final tiebreak so the sort is still total and pagination cannot loop.
+        .order_by(Event.occurred_at.desc(), Event.created_at.desc(), Event.id.desc())
         .limit(limit)
     )
     if before is not None:
