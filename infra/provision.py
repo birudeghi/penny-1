@@ -102,6 +102,12 @@ WEBHOOK_PATH = "/api/whatsapp/webhook"
 # healthy while ticking nothing. A CMD baked into a Dockerfile cannot be ignored, and unlike a
 # dashboard field it can be reviewed in a diff. See infra/tick.Dockerfile.
 TICK_DOCKERFILE = "infra/tick.Dockerfile"
+# One repo, two services, two build configs. The ROOT railway.json applies to every service built
+# from this repository — including its `alembic upgrade head` pre-deploy, which the tick has no
+# DATABASE_URL for and which would run migrations twice if it did. It also pins dockerfilePath,
+# and repo config beats the RAILWAY_DOCKERFILE_PATH variable, so tick built the penny image and
+# died in penny's migrations. RAILWAY_CONFIG_PATH is how a service opts out of the root file.
+TICK_CONFIG = "infra/tick.railway.json"
 TICK_PATH = "/api/internal/tick"
 TICK_SECRET_HEADER = "X-Penny-Tick-Secret"
 # Hourly. The endpoint is idempotent under a per-household advisory lock, so the exact phase does
@@ -249,7 +255,7 @@ def tick_vars() -> list[Var]:
     reproducible from a clone. It was previously a string in this file that a human was told to
     paste into a dashboard.
     """
-    return [Var("RAILWAY_DOCKERFILE_PATH", TICK_DOCKERFILE, Mode.ENFORCE)]
+    return [Var("RAILWAY_CONFIG_PATH", TICK_CONFIG, Mode.ENFORCE)]
 
 
 # Set in Railway ONLY when a run needs to mint them; never rewritten once present.
@@ -1040,6 +1046,22 @@ def self_test() -> int:
         tick_dockerfile.read_text(encoding="utf-8") if tick_dockerfile.exists() else ""
     )
     checks.append((f"{TICK_DOCKERFILE} exists", tick_dockerfile.exists()))
+    tick_config = REPO_ROOT / TICK_CONFIG
+    config = json.loads(tick_config.read_text(encoding="utf-8")) if tick_config.exists() else {}
+    checks.append(
+        (
+            f"{TICK_CONFIG} builds the tick image",
+            config.get("build", {}).get("dockerfilePath") == TICK_DOCKERFILE,
+        )
+    )
+    # penny's root config runs `alembic upgrade head` before every deploy. The tick has no
+    # database and must not inherit it.
+    checks.append(
+        (
+            "tick config runs no pre-deploy migration",
+            "preDeployCommand" not in config.get("deploy", {}),
+        )
+    )
     checks.append(
         ("tick image runs the script as CMD", "tick.sh" in dockerfile and "CMD" in dockerfile)
     )
