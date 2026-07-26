@@ -13,13 +13,19 @@
  *
  * `.record` is not decoration: it scopes the ported Tailwind reset, because the other five
  * screens are still CSS Modules and would be restyled by a global one. `design.css` explains it.
+ *
+ * "NO ENTRIES YET." IS A CLAIM ABOUT A FAMILY'S MEDICAL RECORD, and this route decides when it is
+ * safe to make. `Timeline` draws that sentence whenever it is handed an empty list, so it must not
+ * be rendered until the server has actually answered — otherwise a failed cold load tells a family
+ * their record is empty when the truth is that we could not read it, which is the single most
+ * alarming thing this screen could do. `answered` below is that gate.
  */
 
 import { useMemo } from 'react'
 import { Link } from 'react-router'
 
 import { useFeed, useMembers, useSession, useUpcoming } from '../api/queries'
-import { ErrorState, FeedSkeleton } from '../components'
+import { ErrorState, FeedSkeleton, RereadBanner } from '../components'
 import { ContextColumn } from '../components/context-column'
 import { PersonHeader } from '../components/person-header'
 import { Timeline } from '../components/timeline'
@@ -37,7 +43,21 @@ export function FeedRoute() {
 
   const household = session.data?.household
   const timeZone = household?.timezone ?? FALLBACK_TIMEZONE
-  const events = feed.data?.pages.flatMap((page) => page.events) ?? []
+  const pages = feed.data?.pages
+  const events = pages?.flatMap((page) => page.events) ?? []
+
+  // `pages` is undefined until the FIRST response lands and stays defined through every later
+  // refetch, failed ones included. That is exactly the "do we know anything yet?" question the
+  // empty state needs, and it is why this is not `!feed.isPending`: a household whose cold load
+  // failed is not pending and has no data, and that combination must not draw an empty record.
+  const answered = pages !== undefined
+
+  // Page 0 is the newest page and every page carries the same freshly computed answer, so this is
+  // simply the most recently refreshed copy. `?? null` collapses the two absences — a caught-up
+  // household and a backend that predates the field — which is right, because neither is a
+  // statement that anything is missing and only a statement of that kind may raise the banner.
+  const pendingReread = pages?.[0]?.pending_reread ?? null
+
   // Rebuilt only when the member list changes. It goes into context, so a fresh object on every
   // render would re-render every avatar and every chat bubble on the page each time the feed
   // polls — which it does, every sixty seconds.
@@ -67,10 +87,18 @@ export function FeedRoute() {
                 />
               ) : null}
 
-              {feed.isPending && events.length === 0 ? (
-                <FeedSkeleton />
-              ) : (
+              {pendingReread ? (
+                <RereadBanner pending={pendingReread} timeZone={timeZone} />
+              ) : null}
+
+              {/* Three outcomes, and the third is the point: answered → the record (which draws
+                  its own one-sentence empty state); not answered and still trying → the skeleton;
+                  not answered because it failed → nothing, because the ErrorState above is the
+                  whole truth we have. */}
+              {answered ? (
                 <Timeline events={events} timeZone={timeZone} />
+              ) : feed.error ? null : (
+                <FeedSkeleton />
               )}
 
               {/* 170px is where the card column starts: the 104px date gutter, the 26px spine

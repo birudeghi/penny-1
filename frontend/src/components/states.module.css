@@ -1,8 +1,23 @@
 /*
- * Loading and error states. Same box, two temperaments.
+ * The error panel, the loading skeleton, and the re-read banner.
  *
- * The empty states that lived here went with the CSS-Module feed: the record's own empty state is
- * one sentence and no box at all, which is a product decision — see `components/timeline.tsx`.
+ * Tokens only, from `index.css`. Nothing here invents a colour, a radius or a font size that the
+ * rest of the app does not already use, because a state is exactly the moment a surface is most
+ * tempted to shout and most damaging when it does.
+ *
+ * There is no loading rule in this file. That is not an omission — see `query-state.tsx`: the
+ * loading state renders nothing, so it has nothing to style. The skeleton that used to live here
+ * (three pulsing cards and a `@keyframes pulse`) is gone with it.
+ */
+
+/* Quiet variant for the upcoming panel, which sits inside a box of its own already. */
+
+/*
+ * "No entries yet." — the feed's empty state, and the whole rule is that it has no box.
+ *
+ * A bordered panel is a thing; a family reads a thing as a message and looks for what it wants
+ * from them. A line of text is an observation. The deliberate absence of a card here is doing as
+ * much work as the deliberate absence of a second sentence.
  */
 
 .error {
@@ -42,12 +57,49 @@
   outline-offset: 2px;
 }
 
+/*
+ * The transient error, floated clear of the record rather than pushed into it.
+ *
+ * `position: fixed` is the point: an in-flow error panel reflows the feed, so a poll that fails
+ * and recovers makes the whole history jump down and back up under someone's eyes while they are
+ * reading it. Fixed, nothing beneath it moves at all.
+ *
+ * `pointer-events: none` because there is nothing to click and it dismisses itself — without it
+ * the toast sits over the bottom of the feed for six seconds swallowing taps meant for a card.
+ * The danger colour is one 3px edge, not a fill: it is a notice, not an alarm.
+ */
+
+/*
+ * The re-read banner: Penny has ingested this stretch of the conversation and has not read it.
+ *
+ * ORIENTATION, NOT AN ALERT, and the styling is where that promise is either kept or broken.
+ * No danger colour, no warning colour, no icon, no border that draws the eye before the history
+ * does — the family has done nothing wrong and there is nothing for them to do. It sits above
+ * the feed, states a fact, and is quieter than the cards it qualifies. If it ever starts looking
+ * more important than a symptom card, it has become the problem it was written to solve.
+ */
+.banner {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: 12px 14px;
+  margin-bottom: 20px;
+  font-size: 15px;
+  line-height: 145%;
+  color: var(--text);
+}
+
+/* The count and the dates carry the meaning; the sentence around them is scaffolding. */
+.bannerFact {
+  color: var(--text-h);
+  font-weight: 600;
+}
+
 .skeleton {
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
-
 .skeletonCard {
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -55,15 +107,22 @@
   height: 108px;
   animation: pulse 1.4s ease-in-out infinite;
 }
-
 .skeletonCard:nth-child(2) {
   animation-delay: 0.15s;
 }
-
 .skeletonCard:nth-child(3) {
   animation-delay: 0.3s;
 }
-
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 @keyframes pulse {
   0%,
   100% {
@@ -78,16 +137,4 @@
   .skeletonCard {
     animation: none;
   }
-}
-
-/* Announced, never seen: the visible cue is the shimmer, which a screen reader cannot use. */
-.srOnly {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
 }

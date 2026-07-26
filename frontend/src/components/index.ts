@@ -9,4 +9,4 @@
  */
 
 export { EventEditor } from './event-editor'
-export { ErrorState, FeedSkeleton } from './query-state'
+export { ErrorState, FeedSkeleton, RereadBanner } from './query-state'

@@ -326,7 +326,12 @@ Events, newest first (`occurred_at DESC, id DESC`), excluding deleted ones.
       "created_at": "2026-07-17T10:02:11Z"
     }
   ],
-  "next_before": "2026-07-14T19:04:00Z"
+  "next_before": "2026-07-14T19:04:00Z",
+  "pending_reread": {
+    "message_count": 412,
+    "first_sent_at": "2026-03-04T09:30:00Z",
+    "last_sent_at": "2026-07-19T21:47:00Z"
+  }
 }
 ```
 
@@ -338,6 +343,40 @@ boundary timestamp can be skipped across a page edge. With a few hundred events 
 day-grouped feed, real keyset pagination protects nothing here.
 
 Reports are **not** in this response. The client interleaves them by date, client-side.
+
+#### `pending_reread` — what Penny has ingested and not yet read
+
+**`null` when the household is caught up, which is the steady state. The key is always present**;
+omitting it would make "caught up" indistinguishable from "this backend predates the field", and
+only one of those may be shown to a family as reassurance.
+
+| Field | Type | Notes |
+|---|---|---|
+| `message_count` | `number` | Messages with `extracted_at IS NULL`, excluding system lines. |
+| `first_sent_at` | `string` | ISO UTC. The earliest `sent_at` **of those messages**, not of the household's history. |
+| `last_sent_at` | `string` | ISO UTC. The latest `sent_at` of those messages. |
+
+Derived on every read from `messages.extracted_at`; **there is no column and no flag.** A stored
+flag would need clearing by every one of the places that stamp the cursor, and the one that forgot
+would leave a banner up forever on a household with nothing left to read.
+
+It exists because **a stretch of history Penny has not read yet renders identically to a stretch
+where nothing happened** — both are an absence of cards. Re-extraction is started by clearing the
+cursor (the onboarding interview does it for the whole household so the corrected care filter
+reaches old history) and the monthly budget aborts it mid-flight by design, so a part-read feed is
+an expected state, not an error. Only a statement about the cursor can tell the two apart.
+
+A count and two bounds, never a list of message ids and never any text: the client's job is to say
+"there is more here than you can see", not to enumerate a family's chat.
+
+The unread set is **not guaranteed contiguous** — voice notes awaiting a transcript are left
+unstamped for a few minutes — so the outer bounds are the strongest claim that is true of every
+shape it can take. Do not render it as "everything after X has been read"; that is a reassurance
+the server cannot support.
+
+Every page of a paginated feed carries the same answer, recomputed. Later pages do **not** return
+`null` as an economy, because a client showing the most recently fetched page would then watch the
+banner vanish the moment somebody scrolled.
 
 ### `GET /api/upcoming`
 
