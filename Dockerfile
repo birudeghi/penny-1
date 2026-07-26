@@ -16,6 +16,11 @@ COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 
 COPY frontend/ ./
+# Penny's WhatsApp number for the landing page. Vite inlines VITE_* variables at build
+# time, and Railway only passes a service variable into a Dockerfile build through a
+# declared ARG. Unset it arrives as "", and landing.tsx falls back to the real number.
+ARG VITE_PENNY_WHATSAPP_NUMBER
+ENV VITE_PENNY_WHATSAPP_NUMBER=$VITE_PENNY_WHATSAPP_NUMBER
 # `tsc -b && vite build` — a type error under strict fails the image, not the deploy.
 RUN npm run build
 

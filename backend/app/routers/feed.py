@@ -53,8 +53,7 @@ def _rows_to_events(
     prove a point already known.
     """
     return [
-        to_event(event, display_name, (photos or {}).get(event.id))
-        for event, display_name in rows
+        to_event(event, display_name, (photos or {}).get(event.id)) for event, display_name in rows
     ]
 
 

@@ -1,0 +1,142 @@
+/*
+ * Sign in as a Luma-style moment: one borderless white card floating in the middle of the page
+ * on a soft shadow, coin on top, two grey fields, one dark button. Labels are visually hidden
+ * (placeholders carry them) — with two fields there is nothing a visible label would
+ * disambiguate, and the emptiness is the design.
+ */
+
+.wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: max(62vh, 460px);
+  text-align: center;
+}
+
+/* No border — the card is only surface and shadow. */
+.card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(360px, 100%);
+  box-sizing: border-box;
+  padding: 36px 32px 32px;
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow:
+    0 1px 2px rgba(14, 27, 38, 0.04),
+    0 12px 40px rgba(14, 27, 38, 0.1);
+}
+
+.coin {
+  width: 48px;
+  height: 48px;
+  margin-bottom: 16px;
+}
+
+.title {
+  margin: 0 0 6px;
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 26px;
+  color: var(--text-h);
+}
+
+.hint {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  margin-top: 22px;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: #f2f3f5;
+  font: inherit;
+  font-size: 15.5px;
+  color: var(--text-h);
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+
+.input::placeholder {
+  color: color-mix(in srgb, var(--text) 75%, transparent);
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--navy);
+  background: var(--surface);
+}
+
+.button {
+  margin-top: 6px;
+  padding: 12px 16px;
+  border: none;
+  border-radius: 10px;
+  background: var(--text-h);
+  color: var(--surface);
+  font: inherit;
+  font-size: 15.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.button:hover:not(:disabled) {
+  opacity: 0.88;
+}
+
+.button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.error {
+  margin: 16px 0 0;
+  font-size: 14px;
+  color: var(--danger);
+}
+
+.demo {
+  margin: 22px 0 0;
+  font-size: 13.5px;
+  color: var(--text);
+}
+
+@media (prefers-color-scheme: dark) {
+  .card {
+    box-shadow:
+      0 1px 2px rgba(0, 0, 0, 0.3),
+      0 12px 40px rgba(0, 0, 0, 0.45);
+  }
+
+  .input {
+    background: #23252e;
+  }
+}
