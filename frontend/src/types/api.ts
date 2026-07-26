@@ -344,6 +344,18 @@ export interface Report extends ReportSummary {
 }
 
 /**
+ * `POST /api/reports/generate` — 202, then poll `GET /api/reports/{report_id}`.
+ *
+ * Accepted, not done: the generation is one LLM call over a year of the record and takes tens of
+ * seconds. The status here is `"pending"`, and it is only ever the *first* status — the panel
+ * that asked for it has to keep asking until the status is terminal.
+ */
+export interface ReportAccepted {
+  report_id: string
+  status: ReportState
+}
+
+/**
  * Exhaustiveness guard. Call it in the default arm of a `switch` over a union: adding a fifth
  * event kind then fails `tsc -b` at every render site instead of silently rendering a blank card.
  */

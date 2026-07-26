@@ -18,6 +18,9 @@ import type {
   FeedPage,
   ImportState,
   ImportStatus,
+  Report,
+  ReportAccepted,
+  ReportState,
   Session,
   UpcomingPage,
   WhatsappRelink,
@@ -26,6 +29,7 @@ import { ApiError } from './client'
 import {
   changePassword,
   deleteEvent,
+  generateReport,
   getFeed,
   getImportStatus,
   getMembers,
@@ -108,8 +112,52 @@ export function useReports() {
   return useQuery({ queryKey: queryKeys.reports, queryFn: ({ signal }) => getReports(signal) })
 }
 
-export function useReport(id: string) {
-  return useQuery({ queryKey: queryKeys.report(id), queryFn: ({ signal }) => getReport(id, signal) })
+const TERMINAL_REPORT_STATES: ReportState[] = ['complete', 'failed']
+
+/**
+ * One report, polled while it is still being written.
+ *
+ * Generation is a single LLM call over a year of the record — tens of seconds — so `pending` and
+ * `running` are states a person actually sits and watches, not a race to lose. Polling at 2s and
+ * stopping dead on a terminal status is the same shape as `useImportStatus`, for the same reason:
+ * a finished document polled forever is a request per two seconds per open tab, and it never
+ * changes again.
+ *
+ * `enabled` on a falsy id, so the panel can call this before anyone has asked for a summary.
+ */
+export function useReport(id: string | null) {
+  return useQuery({
+    queryKey: queryKeys.report(id ?? 'none'),
+    queryFn: ({ signal }) => {
+      if (!id) throw new Error('useReport ran with no report to fetch')
+      return getReport(id, signal)
+    },
+    enabled: id !== null && id !== '',
+    refetchInterval: (query) => (isReportFinished(query.state.data) ? false : 2_000),
+  })
+}
+
+export function isReportFinished(report: Report | undefined): boolean {
+  return report !== undefined && TERMINAL_REPORT_STATES.includes(report.status)
+}
+
+/**
+ * Ask for a summary. A mutation and never a query, deliberately: it SPENDS MONEY.
+ *
+ * A query would fire on mount, on remount, on window focus and on a poll, and each one of those
+ * is a paid LLM call the family did not ask for — which is also why the server limits it to one a
+ * day. It has to be a button press, once, and nothing else.
+ *
+ * The reports list is invalidated on success because the new row belongs in it immediately, at
+ * `pending` — a summary that only appears in the list once it has finished is a summary the
+ * family cannot find again if they navigate away while it is being written.
+ */
+export function useGenerateReport(): UseMutationResult<ReportAccepted, Error, void> {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: generateReport,
+    onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.reports }),
+  })
 }
 
 const TERMINAL_IMPORT_STATES: ImportState[] = ['complete', 'failed']

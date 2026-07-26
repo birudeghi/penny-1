@@ -14,6 +14,7 @@ import type {
   Member,
   OccurredAtPrecision,
   Report,
+  ReportAccepted,
   ReportSummary,
   Session,
   UpcomingPage,
@@ -116,6 +117,18 @@ export function getReports(signal?: AbortSignal): Promise<ReportSummary[]> {
 
 export function getReport(id: string, signal?: AbortSignal): Promise<Report> {
   return api(`/reports/${id}`, { signal })
+}
+
+/**
+ * Ask for a summary. **202, not 200** — the answer is an id to poll, never the document.
+ *
+ * Two 4xx answers are part of the normal life of this button and must not be treated as bugs:
+ * 429 means one was already generated today (the limit exists because each one is a paid LLM
+ * call), and 422 means the record is too thin to summarise yet. Both carry a sentence written
+ * for the family in `detail`, so the caller renders `error.message` and adds nothing.
+ */
+export function generateReport(): Promise<ReportAccepted> {
+  return api('/reports/generate', { method: 'POST' })
 }
 
 export function getMembers(signal?: AbortSignal): Promise<Member[]> {

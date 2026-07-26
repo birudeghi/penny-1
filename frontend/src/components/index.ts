@@ -8,5 +8,6 @@
  * diffable against the source it was taken from.
  */
 
+export { ClinicalSummary } from './clinical-summary'
 export { EventEditor } from './event-editor'
 export { ErrorState, FeedSkeleton, RereadBanner } from './query-state'
