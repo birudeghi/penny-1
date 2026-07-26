@@ -44,6 +44,7 @@ from app.assistant import (
 )
 from app.db import to_asyncpg_url
 from app.llm.gateway import InMemoryRunRecorder, LLMGateway
+from app.llm.prompts import care_brief_hash
 from app.llm.transport import FakeTransport
 from app.models import Base, Event, Household, Member, Message
 
@@ -370,6 +371,23 @@ async def test_every_reply_lands_in_the_cost_audit() -> None:
     assert transport.calls[0]["max_output_tokens"] <= 2_000
     # The audit row identifies the call without storing a word of it.
     assert len(record.request_fingerprint) == 32
+    assert record.care_brief_hash == care_brief_hash(CARE_BRIEF)
+
+
+async def test_a_reply_under_a_different_brief_records_a_different_brief_hash() -> None:
+    """A reply is answered under the same relevance filter extraction ran under, and "why did
+    Penny say it wasn't in the record?" is investigated by asking which brief was in force at
+    the time — not which one the household has today."""
+    _, _, first = await reply_to("who are you?", "about_penny", "I'm Penny.")
+    _, _, second = await reply_to(
+        "who are you?",
+        "about_penny",
+        "I'm Penny.",
+        care_brief="Care recipient: Alfie Doyle.\nHousehold timezone: Europe/London.",
+    )
+
+    assert first.records[0].prompt_version == second.records[0].prompt_version
+    assert first.records[0].care_brief_hash != second.records[0].care_brief_hash
 
 
 # --- the context we assemble ----------------------------------------------------------

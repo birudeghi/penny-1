@@ -73,6 +73,9 @@ class DbRunRecorder:
             "status": run.status,
             "model": run.model,
             "prompt_version": run.prompt_version,
+            # Written straight through, NULL included: a merge run has no brief, and a NULL
+            # here means "this call was made without one" rather than "we forgot to record it".
+            "care_brief_hash": run.care_brief_hash,
             "reasoning_effort": run.reasoning_effort,
             # Empty string means "no request was made" (a budget denial). NULL says that
             # better than "" does, and the column is nullable for exactly this case.

@@ -57,6 +57,7 @@ from app.care_profile import build_brief
 from app.config import get_settings
 from app.extraction.service import _HouseholdBudget
 from app.llm.gateway import CallSpec, LLMGateway, Purpose
+from app.llm.prompts import care_brief_hash
 from app.llm.recorder import DbRunRecorder
 from app.models import Event, Message
 
@@ -298,6 +299,10 @@ async def compose_reply(
             reasoning_effort=ASSISTANT_EFFORT,
             household_id=household_id,
             prompt_version=ASSISTANT_PROMPT_VERSION,
+            # The reply is answered under the same brief extraction ran under, and a reply that
+            # missed something is investigated the same way — by asking which brief was in force
+            # at the time, not which one the household has today.
+            care_brief_hash=care_brief_hash(context.care_brief),
         )
     )
     return finish_reply(result.parsed)
