@@ -34,8 +34,17 @@ Related documents, cross-linked rather than repeated:
 Find your workspace id:
 
 ```sh
-railway list --json | python3 -c "import json,sys;print({p['workspace']['id']:p['workspace']['name'] for p in json.load(sys.stdin)})"
+railway whoami --json
 ```
+
+```json
+{ "name": "…", "email": "…", "workspaces": [{ "id": "f65d2610-…", "name": "… Projects" }] }
+```
+
+**Not `railway list`.** That lists *projects* and reads the workspace off each one, so on the
+account this runbook is written for — a new one, with no projects yet — it returns an empty list
+and looks like you have no workspaces. `whoami` asks about the user and answers on an empty
+account, which is the only account that needs to ask.
 
 ## 2. Provision
 
