@@ -79,7 +79,7 @@ from fastapi import APIRouter, BackgroundTasks, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import gowa
+from app import gowa, outbound
 from app.assistant import answer_mention
 from app.config import get_settings
 from app.db import get_sessionmaker
@@ -786,7 +786,9 @@ async def send_welcome(household_id: UUID, chat_id: str, username: str, passphra
     a non-2xx that costs us five more deliveries of a message already stored.
 
     The passphrase is in the argument list and in the message body and NOWHERE ELSE. It is never
-    logged, and `gowa.send_message` logs a character count rather than the text it sent.
+    logged: `outbound.send_to_group` and `gowa.send_message` both log a character count rather
+    than the text they sent. This is also the one caller allowed to pass `trusted=True` — see
+    the call below for why the passphrase makes that necessary rather than merely convenient.
 
     THE LAST THING THIS DOES BEFORE SPEAKING IS WAIT AND LOOK AGAIN. Gate (c) in
     `_handle_group_event` can only see the groups that have appeared SO FAR, so the first join
@@ -808,7 +810,11 @@ async def send_welcome(household_id: UUID, chat_id: str, username: str, passphra
         if not await _was_a_solitary_join(household_id, chat_id):
             return
         message = welcome_message(username, passphrase, get_settings().app_public_url)
-        result = await gowa.send_message(chat_id, message)
+        # trusted=True — the ONLY server-authored send in the app. Both halves of that matter:
+        # every word of `welcome_message` is ours, and the passphrase inside it would not
+        # survive the length cap the untrusted path applies. When the onboarding interview
+        # starts sending model-authored follow-ups, they go out the default door, not this one.
+        result = await outbound.send_to_group(chat_id, message, trusted=True)
         if result.ok:
             log.info(
                 "webhook.welcome_sent",
@@ -1082,7 +1088,10 @@ async def send_reply(
             # answer the assistant declined to give. Saying nothing is always allowed.
             log.info("webhook.reply_declined", extra={"household_id": str(household_id)})
             return
-        result = await gowa.send_message(chat_id, answer)
+        # The default door. `finish_reply` has already stripped model URLs and appended our
+        # own where the kind calls for it; sanitising again is idempotent and keeps the
+        # guarantee at the exit rather than at one caller's discretion.
+        result = await outbound.send_to_group(chat_id, answer)
         log.info(
             "webhook.reply_sent" if result.ok else "webhook.reply_send_failed",
             extra={
