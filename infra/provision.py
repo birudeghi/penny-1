@@ -97,7 +97,11 @@ WEBHOOK_PATH = "/api/whatsapp/webhook"
 # OpenAI. A container that sleeps between its own ticks cannot do that whatever the dashboard says,
 # and it puts the schedule in the repository, which is the same argument config.py makes about
 # every other default. The cost is one idle container (a few MB of RAM, pennies a month).
-TICK_IMAGE = "curlimages/curl:8.11.1"
+# The tick is BUILT, not configured. It used to be a stock image plus `RAILWAY_RUN_COMMAND`, and
+# Railway ignored that variable: the image's entrypoint ran instead, and the service reported
+# healthy while ticking nothing. A CMD baked into a Dockerfile cannot be ignored, and unlike a
+# dashboard field it can be reviewed in a diff. See infra/tick.Dockerfile.
+TICK_DOCKERFILE = "infra/tick.Dockerfile"
 TICK_PATH = "/api/internal/tick"
 TICK_SECRET_HEADER = "X-Penny-Tick-Secret"
 # Hourly. The endpoint is idempotent under a per-household advisory lock, so the exact phase does
@@ -221,7 +225,11 @@ def tick_command() -> str:
     """
     url = f"{_service_domain(PENNY_SERVICE)}:{PENNY_PORT}{TICK_PATH}"
     return (
-        "sh -c 'while true; do "
+        # `alpine` ships no curl, so it is installed once per container start. `;` and not `&&`
+        # for the same reason the loop uses `;`: if apk cannot reach the mirror, the hourly
+        # "curl: not found" in the log is a better outcome than a container that exits before it
+        # has said anything.
+        "sh -c 'apk add --no-cache curl; while true; do "
         f"curl -fsS -m {TICK_TIMEOUT_SECONDS} -X POST "
         f'-H "{TICK_SECRET_HEADER}: $INTERNAL_TICK_SECRET" {url}; '
         f"sleep {TICK_INTERVAL_SECONDS}; done'"
@@ -231,14 +239,17 @@ def tick_command() -> str:
 def tick_vars() -> list[Var]:
     """The tick service's non-secret variables. `INTERNAL_TICK_SECRET` arrives with the secrets.
 
-    `RAILWAY_RUN_COMMAND` is Railway's own override for a service's start command, and it is the
-    one thing in this file that could not be proven from the repository — the CLI verified at
-    5.27.0 and 5.28.1 has no start-command flag, so this is the mechanism instead. It fails
-    SAFELY if Railway ignores it: the image's entrypoint is `curl` with no arguments, so the
-    service crash-loops visibly and ticks nothing, rather than quietly running something else.
-    `report_manual_steps` prints the command so an operator can paste it into the dashboard.
+    `RAILWAY_DOCKERFILE_PATH` is how one repository builds two different images: penny from the
+    root `Dockerfile`, tick from `infra/tick.Dockerfile`. It replaced `RAILWAY_RUN_COMMAND`, which
+    Railway ignored outright on this service — the container ran its image's own entrypoint, the
+    service reported Online and then Completed, and nothing ticked. The failure was silent for
+    exactly as long as it takes somebody to notice a quiet household's feed is a day behind.
+
+    The loop itself now lives in `infra/tick.sh`, which means it is reviewable, diffable and
+    reproducible from a clone. It was previously a string in this file that a human was told to
+    paste into a dashboard.
     """
-    return [Var("RAILWAY_RUN_COMMAND", tick_command(), Mode.ENFORCE)]
+    return [Var("RAILWAY_DOCKERFILE_PATH", TICK_DOCKERFILE, Mode.ENFORCE)]
 
 
 # Set in Railway ONLY when a run needs to mint them; never rewritten once present.
@@ -667,11 +678,11 @@ def ensure_tick(rw: Railway, console: Console) -> bool:
     if TICK_SERVICE in service_names(rw):
         console.step("already present")
         return False
-    args = ["add", "--image", TICK_IMAGE, "--service", TICK_SERVICE]
+    args = ["add", "--service", TICK_SERVICE]
     for var in tick_vars():
         args += ["-v", f"{var.key}={var.value}"]
     rw.write(*args, "--json")
-    console.step(f"created from {TICK_IMAGE}; ticks every {TICK_INTERVAL_SECONDS}s")
+    console.step(f"created; builds {TICK_DOCKERFILE}, ticks every {TICK_INTERVAL_SECONDS}s")
     return True
 
 
@@ -913,6 +924,16 @@ def report_manual_steps(
 # --- Offline self-test ----------------------------------------------------------------------------
 
 
+def _code_only(text: str) -> str:
+    """Everything but the comments. `#` only starts one at the beginning of a line here.
+
+    Deliberately not a shell parser: these two files are short, hand-written and reviewed, and a
+    real tokeniser would be more code than the thing it checks. What it must not do is match a
+    trap named in a comment, which is the whole reason it exists.
+    """
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+
+
 def self_test() -> int:
     """Everything that can be proved without touching Railway. No network, no mutation."""
     checks: list[tuple[str, Any]] = []
@@ -987,22 +1008,42 @@ def self_test() -> int:
     resolved = dict(settled, DATABASE_URL="postgresql://real:secret@host/db")
     checks.append(("resolved reference is NOT rewritten", plan_variables(resolved, desired) == []))
 
-    # The tick, whose whole configuration is one line of shell.
-    command = tick_command()
-    checks.append(("tick command runs under a shell", command.startswith("sh -c '")))
+    # THE TICK IS CHECKED AT ITS SOURCE, not at a string this file can format. These assertions
+    # used to read `tick_command()` — and kept passing, all seven of them, through a deployment
+    # where the tick ran nothing at all, because Railway ignored the variable that carried it.
+    # A green check on a value nobody executes is worse than no check: it is the reason nobody
+    # looked. What runs is `infra/tick.sh`, so that is what is read here.
+    tick_sh = REPO_ROOT / "infra" / "tick.sh"
+    raw_script = tick_sh.read_text(encoding="utf-8") if tick_sh.exists() else ""
+    # Comments are stripped before any of this is searched. Both files EXPLAIN the traps they
+    # avoid — "`set -e` is deliberately ABSENT", "No ENTRYPOINT on purpose" — and a naive
+    # substring match over the prose fails on the very sentence that documents the fix.
+    script = _code_only(raw_script)
+    checks.append(("infra/tick.sh exists", bool(raw_script)))
+    checks.append(("tick script is a shell script", raw_script.startswith("#!/bin/sh")))
     checks.append(
-        (
-            "tick command keeps $INTERNAL_TICK_SECRET unexpanded",
-            "$INTERNAL_TICK_SECRET" in command,
-        )
+        ("tick keeps $INTERNAL_TICK_SECRET unexpanded", "$INTERNAL_TICK_SECRET" in script)
     )
-    checks.append((f"tick command sends {TICK_SECRET_HEADER}", TICK_SECRET_HEADER in command))
-    checks.append(("tick targets penny's private port", f":{PENNY_PORT}{TICK_PATH}" in command))
+    checks.append((f"tick sends {TICK_SECRET_HEADER}", TICK_SECRET_HEADER in script))
+    checks.append(("tick targets penny's private port", f":{PENNY_PORT}{TICK_PATH}" in script))
     # A container that EXITS is restarted by Railway, which would turn the schedule into a hot
     # loop against an endpoint that spends money. It must sleep instead.
-    checks.append(("tick sleeps between runs rather than exiting", "sleep" in command))
-    checks.append(("a failed tick does not stop the loop", "&&" not in command))
-    checks.append(("tick curl fails loudly on a 401", "-fsS" in command))
+    checks.append(("tick sleeps between runs rather than exiting", "sleep" in script))
+    # `set -e` would end the loop on the first failed tick and hand the schedule to Railway's
+    # restart policy, which has no hourly interval in it.
+    checks.append(("a failed tick does not stop the loop", "set -e" not in script))
+    checks.append(("tick curl fails loudly on a 401", "-fsS" in script))
+    # The Dockerfile is what makes the script unignorable; without a CMD we are back to a
+    # dashboard field.
+    tick_dockerfile = REPO_ROOT / TICK_DOCKERFILE
+    dockerfile = _code_only(
+        tick_dockerfile.read_text(encoding="utf-8") if tick_dockerfile.exists() else ""
+    )
+    checks.append((f"{TICK_DOCKERFILE} exists", tick_dockerfile.exists()))
+    checks.append(
+        ("tick image runs the script as CMD", "tick.sh" in dockerfile and "CMD" in dockerfile)
+    )
+    checks.append(("tick image has no ENTRYPOINT to swallow it", "ENTRYPOINT" not in dockerfile))
 
     internal_py = REPO_ROOT / "backend" / "app" / "routers" / "internal.py"
     deadline = tick_deadline_from_source(internal_py) if internal_py.exists() else None
