@@ -54,20 +54,27 @@ export function Timeline({ events, timeZone }: { events: Event[]; timeZone: stri
  *
  * Kept quiet on purpose: it is orientation, not a headline, and it is what lets every date below
  * it stay short — "Sat 25 Jul", never "Sat 25 Jul 2026".
+ *
+ * BELOW `sm` IT IS THE LABEL AND NOTHING ELSE. It shares its grid, its spine and its 137px with
+ * the entries beneath it — see `timeline-entry.tsx` for why all three go on a phone — and its own
+ * dot goes with them, because a 7px disc in `--rule` marks where the spine begins and there is no
+ * spine left for it to begin. What remains is the one thing the marker is actually for: with the
+ * dates below it shortened to "Sat 25 Jul", this is the only place the year is written down, and
+ * a record scrolled back four years that never says which year is a record that lies quietly.
  */
 function YearMarker({ year }: { year: string }) {
   return (
     // Same three columns as an entry, so the year sits in the date gutter and
     // its dot lands dead on the spine that runs through every node below it.
-    <div className="relative grid grid-cols-[104px_26px_minmax(0,1fr)] gap-x-5 pt-4 pb-6">
+    <div className="relative pt-4 pb-6 sm:grid sm:grid-cols-[104px_26px_minmax(0,1fr)] sm:gap-x-5">
       <span
         aria-hidden
-        className="absolute top-[22px] bottom-0 left-[137px] w-px -translate-x-1/2 bg-rule"
+        className="absolute top-[22px] bottom-0 left-[137px] hidden w-px -translate-x-1/2 bg-rule sm:block"
       />
       <div className="text-[12px] font-semibold tracking-[0.06em] text-muted-foreground">
         {year}
       </div>
-      <span className="relative z-10 mt-1 justify-self-center">
+      <span className="relative z-10 mt-1 hidden justify-self-center sm:block">
         <span className="block size-[7px] rounded-full bg-rule ring-4 ring-ground" />
       </span>
     </div>

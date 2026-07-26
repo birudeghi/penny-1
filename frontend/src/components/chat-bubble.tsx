@@ -75,10 +75,13 @@ export function ChatBubble({
               </span>
               <span className="text-[9px] font-medium text-wellbeing">Spoken</span>
             </div>
-            <p className="mt-1 text-[13px] leading-snug">{excerpt.quote}</p>
+            <p className="mt-1 text-[13px] leading-snug break-words">{excerpt.quote}</p>
           </>
         ) : (
-          <p className="text-[13px] leading-snug">{excerpt.quote}</p>
+          /* `break-words` because a quote is verbatim and families paste links: one 200-character
+             NHS URL with no space in it is wider than a phone, and without this it pushes the
+             bubble out through the card and gives the whole page a horizontal scrollbar. */
+          <p className="text-[13px] leading-snug break-words">{excerpt.quote}</p>
         )}
       </div>
     </div>
