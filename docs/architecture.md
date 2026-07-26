@@ -1,30 +1,39 @@
 # Penny architecture
 
-Penny is a same-origin React and FastAPI application. Families can backfill a WhatsApp `.txt`
-export or receive live group messages through GOWA; both paths converge on one idempotent ingestion
-boundary and one extraction service.
+Penny is a same-origin React and FastAPI application with a WhatsApp bridge alongside it. A
+family adds a phone number to their group chat; from that moment Penny reads the conversation,
+asks who is being cared for, turns what the family says into a structured care record, and
+answers when she is addressed by name.
 
-> [!NOTE]
-> This diagram describes the current working tree. Solid green nodes are active in
-> `app/main.py`. Dashed amber nodes are inactive: most are implemented routers that are not
-> currently registered. Reports have a frontend route, API contract, and database model, but no
-> backend router yet.
+Everything below describes the current working tree. Where something is specified but not
+built, it says so.
+
+## The one-paragraph version
+
+Every inbound message arrives at one webhook, is normalised to one contract, and is inserted by
+one function that resolves which household it belongs to. After the webhook has answered, three
+kinds of background work may run against that message: a voice note is transcribed, the
+onboarding interview may read it, and extraction turns a batch of messages into care events. A
+scheduled tick catches the households that have gone quiet. Everything Penny says goes back out
+through one hardened door.
+
+## System
 
 ```mermaid
 flowchart TB
     family["Family member<br/>web browser"]
     whatsapp["WhatsApp group"]
-    openai["OpenAI Responses API"]
+    openai["OpenAI<br/>Responses + audio.transcriptions"]
 
     subgraph railway["Railway project"]
         direction LR
 
-        subgraph penny["penny service - one Docker image"]
+        subgraph penny["penny service — one Docker image"]
             direction TB
 
-            subgraph browser["React 19 SPA"]
+            subgraph browser["React 19 SPA (Vite, Tailwind 4, shadcn)"]
                 direction LR
-                screens["Feed | Import | Settings<br/>Login | Report"]
+                screens["Timeline · Settings · Import<br/>Login · Report"]
                 query["TanStack Query<br/>cache, polling, optimistic edits"]
                 client["Typed API client<br/>same-origin /api"]
                 screens --> query --> client
@@ -32,126 +41,251 @@ flowchart TB
 
             subgraph fastapi["FastAPI application"]
                 direction TB
-                middleware["JSON logging<br/>error handlers<br/>dev-only CORS"]
-                mounted["Mounted now<br/>health + AI status"]
-                spa["SPA catch-all<br/>frontend/dist"]
-                session["Session and tenant boundary<br/>signed HttpOnly household_id cookie<br/>HouseholdCtx filters every query"]
-
-                subgraph dormant["Implemented routers - not mounted in app/main.py"]
-                    direction LR
-                    auth["Auth + /me"]
-                    readapi["Feed + upcoming<br/>household + members"]
-                    eventapi["Event edit<br/>soft delete"]
-                    importapi["Import<br/>preview, start, poll"]
-                    waapi["WhatsApp<br/>status, link, relink"]
-                    webhook["Webhook<br/>raw-body HMAC verify<br/>validate + adapt"]
-                end
-
-                reportapi["Reports API + scheduled generation<br/>contract only; router absent"]
-                middleware --> mounted
-                middleware -.-> dormant
-                middleware -.-> reportapi
-                session -.-> dormant
-                mounted --> spa
+                middleware["JSON logging · error handlers<br/>dev-only CORS"]
+                session["Session and tenant boundary<br/>signed HttpOnly cookie carrying<br/>household_id + session_version"]
+                readapi["Feed · upcoming · events<br/>household · members · auth"]
+                importapi["Import — preview, start, poll"]
+                waapi["WhatsApp — status, link, relink"]
+                webhook["Webhook — raw-body HMAC<br/>join gates · ingest · dispatch"]
+                tickapi["POST /api/internal/tick<br/>shared secret, no cookie"]
+                spa["SPA catch-all — frontend/dist"]
+                middleware --> session --> readapi
+                middleware --> webhook
+                middleware --> tickapi
+                readapi --> spa
             end
 
-            subgraph ingest["Shared ingestion"]
+            subgraph ingest["Shared ingestion — the one door in"]
                 direction LR
-                txt["WhatsApp export parser<br/>sniff date format<br/>user confirms timezone"]
+                txt["WhatsApp .txt export parser<br/>user confirms dayfirst + timezone"]
                 contract["InboundMessage contract"]
                 seam["ingest_messages<br/>resolve household + member<br/>hash and insert idempotently"]
                 txt --> contract --> seam
             end
 
-            subgraph extraction["Incremental extraction"]
-                direction LR
-                trigger["Detached background task<br/>after request commit"]
-                service["Extraction service<br/>per-household advisory lock<br/>30-day budget guard"]
-                cursor["Read messages where<br/>extracted_at IS NULL"]
-                runner["Chunk + overlap context<br/>concurrent structured calls<br/>validate, merge, deduplicate"]
-                gateway["LLM gateway<br/>retry, truncation handling<br/>usage and cost accounting"]
-                persist["Persist extraction<br/>protect human edits<br/>stamp processed messages"]
-                trigger --> service --> cursor --> runner --> gateway
-                runner --> persist
+            subgraph work["Background work — after the 200"]
+                direction TB
+                transcribe["Transcription<br/>download media, transcribe,<br/>mark the payload"]
+                interview["Onboarding interview<br/>read the answer, write the<br/>care profile, say it back"]
+                assistant["@-mention reply<br/>answer from the record only"]
+                extraction["Extraction service<br/>advisory lock · cadence gate<br/>budget guard · bounded batch"]
+                runner["Chunk + overlap · concurrent<br/>structured calls · validate<br/>merge · deduplicate"]
+                persist["Persist<br/>protect human edits<br/>stamp extracted_at"]
+                extraction --> runner --> persist
             end
+
+            profile["care_profile<br/>THE relevance specification<br/>one renderer · one hash"]
+            outbound["outbound.send_to_group<br/>the one door out<br/>URL allowlist unless trusted"]
+            gateway["LLM gateway<br/>retry · truncation · usage<br/>cost accounting · budget"]
         end
 
         subgraph gowa["gowa service"]
             direction TB
-            bridge["WhatsApp bridge<br/>whatsmeow"]
-            pairing["Status + pairing QR API<br/>Basic Auth over private network"]
+            bridge["WhatsApp bridge (whatsmeow)"]
+            pairing["Status + pairing QR<br/>Basic Auth, private network"]
+            media["Media download<br/>by provider_message_id"]
             chatstore[("Persistent volume<br/>chat storage")]
             bridge --- pairing
+            bridge --- media
             bridge --- chatstore
         end
 
-        postgres[("PostgreSQL 16<br/>households | members | whatsapp_links<br/>messages | llm_runs | events<br/>imports | reports<br/><br/>household_id is the tenant key<br/>unique indexes enforce replay safety")]
+        tick["tick service<br/>cron → POST /api/internal/tick"]
+
+        postgres[("PostgreSQL 16<br/>households · members · whatsapp_links<br/>known_groups · messages · llm_runs<br/>events · imports · reports<br/><br/>household_id is the tenant key<br/>unique indexes enforce replay safety")]
     end
 
     family -->|HTTPS| screens
     client -->|JSON + multipart<br/>cookie credentials| middleware
     spa -->|index.html + assets| family
 
-    client -.-> auth
-    client -.-> readapi
-    client -.-> eventapi
-    client -.-> importapi
-    client -.-> waapi
-    client -.-> reportapi
-
-    importapi -.->|preview / commit| txt
-    webhook -.-> contract
-    seam -->|messages + members| postgres
-    importapi -.->|accepted import| trigger
-    webhook -.->|return 200, then extract| trigger
-
-    service -->|advisory lock + budget query| postgres
-    postgres --> cursor
-    gateway -->|strict JSON schema request| openai
-    openai -->|events + token usage| gateway
-    gateway -->|audit every attempt| postgres
-    persist -->|events, occurrences,<br/>extracted_at cursor| postgres
-
-    auth -.-> postgres
-    readapi -.-> postgres
-    eventapi -.-> postgres
-    importapi -.-> postgres
-    waapi -.-> postgres
-    reportapi -.-> postgres
-
     whatsapp -->|linked-device events| bridge
-    bridge -->|signed webhook<br/>private network| webhook
-    waapi -.->|status, link, relink<br/>private network| pairing
-    bridge -->|whatsmeow session tables| postgres
+    bridge -->|signed webhook, private network| webhook
+    waapi -->|status, link, relink| pairing
+    transcribe -->|fetch bytes| media
+
+    webhook --> contract
+    importapi --> txt
+    seam -->|messages + members| postgres
+
+    webhook -.->|after the response| transcribe
+    webhook -.->|after the response| interview
+    webhook -.->|after the response| assistant
+    webhook -.->|after the response| extraction
+    tick -->|hourly, shared secret| tickapi
+    tickapi --> extraction
+
+    profile --> extraction
+    profile --> interview
+    profile --> assistant
+    interview -->|write_profile| profile
+    interview --> outbound
+    assistant --> outbound
+    webhook -->|welcome, trusted| outbound
+    outbound -->|send| bridge
+
+    extraction --> gateway
+    interview --> gateway
+    assistant --> gateway
+    transcribe --> gateway
+    gateway -->|strict JSON schema| openai
+    openai -->|structured output + usage| gateway
+    gateway -->|audit every attempt| postgres
+    persist --> postgres
+    readapi --> postgres
+    profile --> postgres
 
     classDef active fill:#e9f7ef,stroke:#247a46,color:#12351f,stroke-width:2px;
-    classDef dormant fill:#fff5df,stroke:#b7791f,color:#4a3107,stroke-width:2px,stroke-dasharray:6 4;
     classDef external fill:#eef3f8,stroke:#536779,color:#1e2933;
     classDef store fill:#f2ecf8,stroke:#704b8f,color:#2f1f3a,stroke-width:2px;
+    classDef keystone fill:#fdf0f5,stroke:#a03060,color:#3d1123,stroke-width:2px;
 
-    class middleware,mounted,spa active;
-    class auth,readapi,eventapi,importapi,waapi,webhook,reportapi dormant;
+    class middleware,session,readapi,importapi,waapi,webhook,tickapi,spa active;
     class family,whatsapp,openai external;
     class postgres,chatstore store;
+    class profile,outbound,seam keystone;
 ```
 
-## Runtime status
+The three pink nodes are the chokepoints. Each exists because the same mistake was made twice
+before it was one function: `ingest_messages` is the only writer of `messages`,
+`outbound.send_to_group` is the only sender to a group, and `care_profile` is the only renderer
+of the brief.
 
-- `app/main.py` currently includes only the health and AI routers before mounting the SPA.
-- Auth, feed, event, household, import, member, webhook, and WhatsApp routers exist in
-  `backend/app/routers/` but are not reachable until they are included in `app/main.py`.
-- The report screens, API contract, and `reports` table exist; report endpoints and generation are
-  not implemented.
-- Production builds the SPA in the first Docker stage, copies it into the Python image, runs
-  Alembic in Railway's pre-deploy phase, and serves the SPA and API from one origin.
+## What happens to one inbound message
+
+```
+GOWA delivers  POST /api/whatsapp/webhook
+      │
+      ├─ raw bytes → HMAC verify → THEN parse      never parse before authenticating
+      ├─ is_from_me?                               drop; GOWA cannot filter our own sends
+      ├─ group.joined / group.participants?        → the join gates (below)
+      │
+      ├─ chat_id ends @g.us?                       direct chats are ignored, not ingested
+      ├─ ingest_messages(chat_id, [InboundMessage])
+      │     resolve group → household              a miss raises; NEVER auto-provisions
+      │     resolve senders → members              before hashing, so the hash keys on a member
+      │     content_hash over minute bucket        a webhook and an export line collapse to one row
+      │     INSERT ... ON CONFLICT DO NOTHING
+      │
+      └─ 200, then background work on `inserted` only  ← a GOWA retry costs nothing
+            │
+            ├─ audio?            transcribe, then extract (one task, ordered)
+            ├─ interview open?   the interview owns this message
+            └─ else @-mention?   the assistant answers
+```
+
+The webhook answers within GOWA's 10-second budget and never raises: GOWA retries five times on
+any non-2xx, and a retry becomes a duplicate message in a family's chat. Every outcome a retry
+cannot fix — an unlinked group, a direct chat, an unparseable body — is a 200 with a reason. A
+bad signature is the one loud failure.
+
+## Who may speak, and when
+
+Penny is paired to a real WhatsApp account that belongs to real group chats. She once answered
+in all of them. Everything here is downstream of that.
+
+| Trigger | Who answers | Gate |
+|---|---|---|
+| `group.joined` | the welcome, with credentials | startup quiet period **and** the `known_groups` ledger |
+| any message, interview open | the interview | linked group, length floor, 14-day window, rate limit |
+| `@Penny …`, interview closed | the assistant | linked group, explicit mention, rate limit |
+| anything else | nobody | — |
+
+**The interview owns a message while it is open.** Without one owner, a family answering with a
+polite @-mention would earn both an interview read-back and an assistant reply to the same
+message.
+
+**Join gates.** `whatsmeow` re-emits `JoinedGroup` during app-state sync for groups the account
+was already in, and GOWA has no guard for it. So a join inside the startup quiet period is
+recorded and never provisions, and any earlier sighting of a group id in `known_groups` makes it
+old news forever. `group.participants` can only feed the ledger; it can never provision.
+
+## The relevance specification
+
+`care_profile` is the newest keystone and the least obvious. A care record is built from a group
+chat, and a group chat is mostly noise — so something has to decide what counts.
+
+```
+onboarding welcome asks 3 questions
+        │
+family answers as an ordinary message
+        │
+interview reads: profile so far + last 30 messages, sender-attributed
+        │
+write_profile()  ─ hash unchanged ─→  store, cost nothing
+        │
+        └─ hash changed ─→ store, clear extracted_at for the household
+                                    │
+                                    └→ the corrected filter re-reads the history
+```
+
+The hash covers the profile's rendered lines and nothing else. Participants and the timezone are
+in the brief because the model needs them, and outside the hash because a member joining or a
+timezone typo must not re-read six months of chat against a $15/month budget. A field that is
+never rendered — `interview_closed` — cannot change what was extracted, so it cannot change the
+hash either.
+
+`llm_runs.care_brief_hash` stores the same value, so "which filter produced this event?" is a
+join rather than an investigation.
+
+## Extraction
+
+`messages.extracted_at IS NULL` is the whole incremental mechanism. A budget abort, a redeploy
+mid-run, or a cleared cursor all self-heal for the same reason: the next run reads the NULLs.
+
+Four gates sit between a message arriving and money being spent:
+
+1. **Advisory lock**, per household, `try` not blocking — a second run has nothing to add.
+2. **Cadence gate** — wait for `extract_min_unextracted` messages or an oldest message older
+   than `extract_max_age_hours`. Extraction is billed per call and ~1,400 tokens of prompt ride
+   along with every one; production once measured 13 runs for 14 messages, 18× the plan.
+3. **Bounded batch** — `_unextracted` reads at most `extract_max_batch_messages`, because "all
+   unextracted" is six months of chat the first time a care profile changes.
+4. **Budget guard** — a rolling 30-day window over `llm_runs.cost_usd`, aborting mid-flight.
+
+A voice note is withheld from extraction until its transcript lands or the grace window expires.
+Extracting `[voice note]` first would stamp the row, and the transcript would arrive seconds
+later against a message nobody will ever read again.
+
+## Deployment
+
+Three Railway services and one Postgres, all provisioned from `infra/provision.py`:
+
+| Service | What it is |
+|---|---|
+| `penny` | the Docker image: SPA built in the first stage, copied into the Python image, served same-origin with the API |
+| `gowa` | the WhatsApp bridge, persistent volume, private network only |
+| `tick` | cron, POSTs `/api/internal/tick` with the shared secret |
+
+Alembic runs in Railway's pre-deploy phase. Secrets that must agree across services —
+`INTERNAL_TICK_SECRET`, `WHATSAPP_WEBHOOK_SECRET`, the GOWA basic auth pair — are generated once
+and written to both sides, with a drift warning when they disagree.
+
+> **Unverified:** the cron schedule field. There was no `railway` CLI available when `tick` was
+> built, so rather than guess a flag the schedule is a `sleep` loop in the container's start
+> command. It fails visibly rather than silently, and `report_manual_steps` prints the command to
+> paste. Confirm before relying on it.
+
+## Specified but not built
+
+- **Reports.** The `reports` table, the API contract and `frontend/src/routes/report.tsx` all
+  exist; no router generates one. The designer's clinical summary panel is built against it.
+- **Media storage.** `gowa.download_media` is used by transcription, so the bytes are reachable,
+  but images and documents still ingest as a type with no text and nothing is persisted.
 
 ## Architectural invariants
 
-- Every tenant-owned row carries `household_id`; request dependencies apply that boundary to reads
-  and writes.
-- Live webhooks and file imports normalize to the same `InboundMessage` contract and call the same
+- Every tenant-owned row carries `household_id`. One dependency applies that boundary; there is
+  no RLS behind it to catch a query that forgets. `known_groups` is the single deliberate
+  exception and says why in its own docstring.
+- Cross-tenant reads return **404, never 403**. A 403 is an existence oracle.
+- Live webhooks and file imports normalise to the same `InboundMessage` and call the same
   ingestion function.
-- Message replay safety lives in PostgreSQL unique indexes, not in request handlers.
+- Replay safety lives in PostgreSQL unique indexes, not in request handlers.
 - `messages.extracted_at IS NULL` is the resumable extraction cursor.
-- Human-edited event fields and soft-deleted event tombstones survive later extraction runs.
-- Every LLM attempt is recorded with model, prompt version, usage, latency, cost, and outcome.
+- Human-edited event fields and soft-deleted tombstones survive later extraction runs.
+- Every LLM attempt is recorded with model, prompt version, care-brief hash, usage, latency,
+  cost and outcome — failures included.
+- Nothing in the webhook path raises, and silence is the safe failure everywhere Penny speaks.
+- Message text, transcripts, prompts, replies and credentials never reach a log line. Ids and
+  counts only.
