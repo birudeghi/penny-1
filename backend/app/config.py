@@ -202,6 +202,26 @@ class Settings(BaseSettings):
     # NOT an int: tests and a "flush fast" incident setting both want fractions of an hour.
     # The age is measured from the oldest waiting message's `sent_at`.
     extract_max_age_hours: float = code_default(6.0)
+    # CODE-DEFAULT — the most messages ONE run may pull out of the cursor and chunk.
+    #
+    # The cursor is `extracted_at IS NULL`, and the query behind it is not always "the last few
+    # messages". A care profile change CLEARS that column for the whole household — that is the
+    # mechanism for "re-read everything now that you know who Margaret is" — so the unbounded
+    # version of the query is six months of a family's chat, selected into one list, chunked in
+    # one process, in one transaction. This is the bound on that.
+    #
+    # 2,400 is 20 chunks at the chunker's TARGET of 120, i.e. five batches of
+    # `runner.MAX_CONCURRENT_CHUNKS`: large enough that an ordinary import and every live
+    # household finish in a single run and never notice the cap, small enough to be a working
+    # set rather than a history. Draining is by REPETITION rather than by a bigger number —
+    # whatever a run leaves keeps `extracted_at IS NULL`, so the next caller resumes exactly
+    # there. That is the same resumability the spend ceiling already relies on.
+    #
+    # IT MUST STAY WELL ABOVE `extract_min_unextracted`. The gate compares against what the run
+    # can SEE, so a cap at or below the count trigger would mean the count trigger can never
+    # fire: every household would sit waiting on the age trigger instead, six hours at a time,
+    # and the batching that this whole section exists to buy would quietly stop happening.
+    extract_max_batch_messages: int = code_default(2400)
 
     # --- Group onboarding -----------------------------------------------------------------
     # ENV-SPECIFIC — the other of the two. Where a family is sent after Penny is added to their

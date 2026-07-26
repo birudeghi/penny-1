@@ -45,7 +45,7 @@ cp .env.example .env   # then fill in your real keys
 | `GOWA_URL` | M6 | — | Private URL of the WhatsApp sidecar, e.g. `http://gowa.railway.internal:3000` |
 | `GOWA_BASIC_AUTH` | M6 | — | `user:pass` for calling GOWA; must match its `APP_BASIC_AUTH` |
 | `WHATSAPP_WEBHOOK_SECRET` | M6 | — | HMAC-SHA256 key for inbound webhooks; must match GOWA's |
-| `INTERNAL_TICK_SECRET` | M5 | — | Shared secret for the cron caller of `/api/internal/tick` |
+| `INTERNAL_TICK_SECRET` | yes | — | Shared secret for the `tick` service that calls `/api/internal/tick` hourly; must match on both services |
 | `IMPORT_MAX_SPEND_USD` | no | `25` | Hard ceiling per import; aborts mid-flight and resumes later |
 | `LLM_MONTHLY_BUDGET_USD_PER_HOUSEHOLD` | no | `15` | Per-household monthly spend guard |
 | `DEFAULT_TIMEZONE` | no | `Europe/London` | Default household timezone |

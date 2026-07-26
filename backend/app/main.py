@@ -13,6 +13,7 @@ from app.routers import (
     health,
     household,
     imports,
+    internal,
     members,
     webhooks,
     whatsapp,
@@ -61,6 +62,7 @@ app.include_router(members.router)  # GET /api/members; POST /api/members/{id}/m
 app.include_router(imports.router)  # POST /api/imports, /preview; GET /api/imports/{id}
 app.include_router(whatsapp.router)  # GET /api/whatsapp/status; POST /link, /relink
 app.include_router(webhooks.router)  # POST /api/whatsapp/webhook — HMAC, no cookie
+app.include_router(internal.router)  # POST /api/internal/tick — shared secret, no cookie
 
 # LAST, always. mount_spa registers a catch-all GET /{path:path}; any router included
 # after it would be shadowed and its paths would return index.html instead.

@@ -58,6 +58,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 PENNY_SERVICE = "penny"
 GOWA_SERVICE = "gowa"
+TICK_SERVICE = "tick"
 DEFAULT_PROJECT = "penny"
 DEFAULT_ENVIRONMENT = "production"
 
@@ -73,6 +74,33 @@ GOWA_MOUNT_PATH = "/app/storages"
 PENNY_PORT = "8000"
 GOWA_PORT = "3000"
 WEBHOOK_PATH = "/api/whatsapp/webhook"
+
+# --- The scheduled tick ------------------------------------------------------------------------
+#
+# `POST /api/internal/tick` is what drains a household that has gone quiet and a backlog nobody is
+# watching (see backend/app/routers/internal.py). Something has to call it, hourly, forever.
+#
+# WHY THE SCHEDULE IS A `sleep` AND NOT RAILWAY'S CRON FIELD. Railway sets a service's cron
+# schedule in its settings, and this script has no verified CLI flag for that field —
+# docs/railway-deployment.md has recorded cron as the unverified corner of the platform reference
+# since M1, and nothing since has verified it. That leaves two honest options, and only one of
+# them is safe: a service created WITHOUT a schedule is an ordinary service, and Railway RESTARTS
+# an ordinary service that exits — so a would-be cron container whose command is one `curl` becomes
+# a hot loop hammering the tick every few seconds, and every one of those ticks can spend money at
+# OpenAI. A container that sleeps between its own ticks cannot do that whatever the dashboard says,
+# and it puts the schedule in the repository, which is the same argument config.py makes about
+# every other default. The cost is one idle container (a few MB of RAM, pennies a month).
+TICK_IMAGE = "curlimages/curl:8.11.1"
+TICK_PATH = "/api/internal/tick"
+TICK_SECRET_HEADER = "X-Penny-Tick-Secret"
+# Hourly. The endpoint is idempotent under a per-household advisory lock, so the exact phase does
+# not matter and an extra run costs one query per due household.
+TICK_INTERVAL_SECONDS = 3600
+# MUST EXCEED `TICK_DEADLINE_SECONDS` in backend/app/routers/internal.py. A curl that gives up
+# while the tick is still working leaves the work committed and the container looping — harmless,
+# but the log then says "timeout" on every healthy run and nobody would ever look at it again.
+# `--self-test` reads the backend constant and fails if this stops being true.
+TICK_TIMEOUT_SECONDS = 900
 
 # GOWA splits APP_BASIC_AUTH on ":" and Fatallns unless it gets exactly two parts, and uses ","
 # to separate user pairs. token_hex() emits [0-9a-f] only, so both are structurally impossible.
@@ -160,15 +188,65 @@ def gowa_vars(*, postgres_service: str) -> list[Var]:
     ]
 
 
+def tick_command() -> str:
+    """The whole scheduled job, as one start command.
+
+    WRAPPED IN `sh -c`, and that is the same trap `preflight` guards railway.json against: Railway
+    runs a start command WITHOUT a shell, so `$INTERNAL_TICK_SECRET` would reach curl as 21
+    literal characters and every tick would 401. That failure is silent in the worst way — a 401
+    looks exactly like a cron with nothing to say, while quiet households stop being drained and
+    nobody finds out until a family notices their feed is a day behind.
+
+    `-f` is what makes it audible: without it curl exits 0 on a 401 and prints the error envelope
+    nowhere anybody reads. With it, a misconfigured secret is a non-zero exit and a line in
+    `railway logs --service tick`.
+
+    `;` between the curl and the sleep, never `&&`: a failed tick must not stop the loop. The
+    next hour is the retry, and there is nothing here to clean up — every message this tick did
+    not get through still has `extracted_at IS NULL`.
+    """
+    url = f"{_service_domain(PENNY_SERVICE)}:{PENNY_PORT}{TICK_PATH}"
+    return (
+        "sh -c 'while true; do "
+        f'curl -fsS -m {TICK_TIMEOUT_SECONDS} -X POST '
+        f'-H "{TICK_SECRET_HEADER}: $INTERNAL_TICK_SECRET" {url}; '
+        f"sleep {TICK_INTERVAL_SECONDS}; done'"
+    )
+
+
+def tick_vars() -> list[Var]:
+    """The tick service's non-secret variables. `INTERNAL_TICK_SECRET` arrives with the secrets.
+
+    `RAILWAY_RUN_COMMAND` is Railway's own override for a service's start command, and it is the
+    one thing in this file that could not be proven from the repository — the CLI verified at
+    5.27.0 has no start-command flag, so this is the mechanism reached for instead. It fails
+    SAFELY if Railway ignores it: the image's entrypoint is `curl` with no arguments, so the
+    service crash-loops visibly and ticks nothing, rather than quietly running something else.
+    `report_manual_steps` prints the command so an operator can paste it into the dashboard.
+    """
+    return [Var("RAILWAY_RUN_COMMAND", tick_command(), Mode.ENFORCE)]
+
+
 # Set in Railway ONLY when a run needs to mint them; never rewritten once present.
-#   name -> (penny key, gowa key or None)
-# A key appearing on both sides MUST hold the same value on both, or the pairing silently
-# half-works: penny would reject every webhook HMAC, or gowa would 401 every outbound send.
-SHARED_SECRETS: dict[str, tuple[str, str | None]] = {
-    "session_secret": ("SESSION_SECRET", None),
-    "internal_tick_secret": ("INTERNAL_TICK_SECRET", None),
-    "webhook_secret": ("WHATSAPP_WEBHOOK_SECRET", "WHATSAPP_WEBHOOK_SECRET"),
-    "basic_auth": ("GOWA_BASIC_AUTH", "APP_BASIC_AUTH"),
+#   name -> {service: the variable that carries it there}
+# A secret that reaches more than one service MUST hold the same value on all of them, or the
+# pairing silently half-works: penny rejects every webhook HMAC, gowa 401s every outbound send,
+# or the tick service 401s every hour while quiet households stop being drained. All three
+# failures look like nothing happening, which is why `reconcile_secrets` says so out loud.
+#
+# PENNY IS LISTED FIRST IN EVERY ENTRY AND THAT IS LOAD-BEARING: it is the side the application
+# reads, so when two services disagree it is the one the others are converged onto.
+SHARED_SECRETS: dict[str, dict[str, str]] = {
+    "session_secret": {PENNY_SERVICE: "SESSION_SECRET"},
+    "internal_tick_secret": {
+        PENNY_SERVICE: "INTERNAL_TICK_SECRET",
+        TICK_SERVICE: "INTERNAL_TICK_SECRET",
+    },
+    "webhook_secret": {
+        PENNY_SERVICE: "WHATSAPP_WEBHOOK_SECRET",
+        GOWA_SERVICE: "WHATSAPP_WEBHOOK_SECRET",
+    },
+    "basic_auth": {PENNY_SERVICE: "GOWA_BASIC_AUTH", GOWA_SERVICE: "APP_BASIC_AUTH"},
 }
 
 # Variables that only restate a `code_default()` in backend/app/config.py. Setting one forks the
@@ -196,6 +274,7 @@ CODE_DEFAULT_KEYS: frozenset[str] = frozenset(
         "SERVE_FRONTEND",
         "EXTRACT_MIN_UNEXTRACTED",
         "EXTRACT_MAX_AGE_HOURS",
+        "EXTRACT_MAX_BATCH_MESSAGES",
         "ONBOARDING_ENABLED",
         "ONBOARDING_MAX_HOUSEHOLDS",
         "ONBOARDING_PLACEHOLDER_CARE_RECIPIENT",
@@ -354,6 +433,21 @@ def code_default_keys_from_source(config_py: Path) -> frozenset[str]:
     source = config_py.read_text(encoding="utf-8")
     names = re.findall(r"^ {4}(\w+)\s*:[^=\n]+=\s*code_default\(", source, re.MULTILINE)
     return frozenset(name.upper() for name in names)
+
+
+def tick_deadline_from_source(internal_py: Path) -> float | None:
+    """`TICK_DEADLINE_SECONDS` read out of the router that enforces it.
+
+    The same drift argument as `code_default_keys_from_source`: `TICK_TIMEOUT_SECONDS` here only
+    means anything RELATIVE to how long the endpoint may take, and a copy of that number in this
+    file would be wrong the first time somebody raised the other one.
+    """
+    match = re.search(
+        r"^TICK_DEADLINE_SECONDS\s*=\s*([0-9.]+)",
+        internal_py.read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    return float(match.group(1)) if match else None
 
 
 # --- Preflight ---------------------------------------------------------------------------------
@@ -521,6 +615,25 @@ def ensure_penny(rw: Railway, console: Console, *, domain: str, postgres_service
     return True
 
 
+def ensure_tick(rw: Railway, console: Console) -> bool:
+    """Create the service that calls `POST /api/internal/tick`. True if it was created.
+
+    It gets NO domain and no volume: it talks to penny over private networking and holds no
+    state. Its only variables are its start command and `INTERNAL_TICK_SECRET`, which arrives
+    with the other secrets so both sides come from one decision — see `SHARED_SECRETS`.
+    """
+    console.head(f"Service {TICK_SERVICE!r}")
+    if TICK_SERVICE in service_names(rw):
+        console.step("already present")
+        return False
+    args = ["add", "--image", TICK_IMAGE, "--service", TICK_SERVICE]
+    for var in tick_vars():
+        args += ["-v", f"{var.key}={var.value}"]
+    rw.write(*args, "--json")
+    console.step(f"created from {TICK_IMAGE}; ticks every {TICK_INTERVAL_SECONDS}s")
+    return True
+
+
 def ensure_source(rw: Railway, console: Console, *, repo: str | None, branch: str) -> None:
     """Point penny at GitHub, so a deploy is a git push and nothing lives only on a laptop."""
     console.head("Deploy source")
@@ -614,58 +727,57 @@ def apply_variables(rw: Railway, console: Console, service: str, desired: list[V
 
 
 def reconcile_secrets(
-    rw: Railway,
     console: Console,
     *,
-    penny_live: dict[str, str],
-    gowa_live: dict[str, str],
+    live: dict[str, dict[str, str]],
     openai_key: str | None,
-) -> tuple[list[Var], list[Var], dict[str, str]]:
-    """Decide every secret's value once, for both services.
+) -> tuple[dict[str, list[Var]], dict[str, str]]:
+    """Decide every secret's value ONCE, then say where it still has to be written.
 
-    Returns (penny writes, gowa writes, secrets minted THIS RUN). Existing values are reused
-    verbatim and never rewritten — a rewrite of SESSION_SECRET logs every household out, and a
-    rewrite of the webhook secret breaks ingest until both sides land.
+    `live` is {service: its variables, resolved}. Returns ({service: writes}, secrets minted THIS
+    RUN). Existing values are reused verbatim and never rewritten — a rewrite of SESSION_SECRET
+    logs every household out, and a rewrite of the webhook secret breaks ingest until both sides
+    land.
+
+    Deciding the value before touching any service is what makes a secret shared by three
+    services converge in one pass instead of two, and it is why a disagreement is detectable at
+    all: by the time anything is written, every side's current value has been read.
     """
-    penny_writes: list[Var] = []
-    gowa_writes: list[Var] = []
+    writes: dict[str, list[Var]] = {service: [] for service in live}
     minted: dict[str, str] = {}
 
-    for name, (penny_key, gowa_key) in SHARED_SECRETS.items():
-        on_penny = penny_live.get(penny_key)
-        on_gowa = gowa_live.get(gowa_key) if gowa_key else None
-
-        if on_penny and on_gowa and on_penny != on_gowa:
-            # The silent half-broken state: penny rejects every webhook HMAC, or gowa 401s every
-            # outbound send. penny is the side the app reads, so it wins and gowa converges.
-            console.warn(
-                f"{penny_key} on {PENNY_SERVICE} and {gowa_key} on {GOWA_SERVICE} DISAGREE. "
-                f"They must match. Copying {PENNY_SERVICE}'s value to {GOWA_SERVICE}."
-            )
-            on_gowa = None
-
-        value = on_penny or on_gowa
+    for name, keys in SHARED_SECRETS.items():
+        found = {service: live.get(service, {}).get(key) or None for service, key in keys.items()}
+        # penny is the side the application reads, so it decides; anything else converges onto it.
+        value = found.get(PENNY_SERVICE) or next((v for v in found.values() if v), None)
         if value is None:
             value = new_basic_auth() if name == "basic_auth" else new_secret()
-            minted[penny_key] = value
+            minted[keys[PENNY_SERVICE]] = value
         if name == "basic_auth":
             check_basic_auth(value)
         console.guard(value)
 
-        if not on_penny:
-            penny_writes.append(Var(penny_key, value, Mode.IF_ABSENT, secret=True))
-        if gowa_key and not on_gowa:
-            gowa_writes.append(Var(gowa_key, value, Mode.IF_ABSENT, secret=True))
+        for service, key in keys.items():
+            if found[service] == value:
+                continue
+            if found[service] is not None:
+                # The silent half-broken state: penny rejects every webhook HMAC, gowa 401s every
+                # outbound send, or the tick 401s hourly and quiet households never drain.
+                console.warn(
+                    f"{key} on {service} DISAGREES with {keys[PENNY_SERVICE]} on {PENNY_SERVICE}. "
+                    f"They must match. Copying {PENNY_SERVICE}'s value to {service}."
+                )
+            writes.setdefault(service, []).append(Var(key, value, Mode.IF_ABSENT, secret=True))
 
     # ENV-SPECIFIC. The one value no script can invent, and the only reason a teammate needs a
     # conversation. Never rewritten from the environment on a re-run: rotating a key by accident
     # is a support incident, and `railway variable set OPENAI_API_KEY --stdin` is the way to do
     # it on purpose.
-    if "OPENAI_API_KEY" in penny_live:
+    if "OPENAI_API_KEY" in live.get(PENNY_SERVICE, {}):
         console.step("OPENAI_API_KEY already set; leaving it alone")
     elif openai_key:
         console.guard(openai_key)
-        penny_writes.append(Var("OPENAI_API_KEY", openai_key, Mode.IF_ABSENT, secret=True))
+        writes[PENNY_SERVICE].append(Var("OPENAI_API_KEY", openai_key, Mode.IF_ABSENT, secret=True))
     else:
         console.warn(
             "OPENAI_API_KEY is not set and none was supplied. Penny will boot and serve the feed "
@@ -673,7 +785,7 @@ def reconcile_secrets(
             "     printf %s '<key>' | railway variable set OPENAI_API_KEY --stdin --service penny"
         )
 
-    return penny_writes, gowa_writes, minted
+    return writes, minted
 
 
 def prune(rw: Railway, console: Console, service: str, live: dict[str, str]) -> None:
@@ -730,7 +842,16 @@ def report_manual_steps(console: Console, *, domain: str, dns: dict[str, Any] | 
     console.say("     https://platform.openai.com/settings/organization/limits")
     console.say("     The one guard no bug in this repository can bypass.")
 
-    console.say("\n  4. Verify — docs/deployment.md#verify.")
+    console.say(f"\n  4. Confirm the {TICK_SERVICE!r} service is looping, not crash-looping.")
+    console.say(f"       railway logs --service {TICK_SERVICE}")
+    console.say("     It should print nothing but an hourly POST. If it is restarting, Railway")
+    console.say("     ignored RAILWAY_RUN_COMMAND — paste this into its start command instead:")
+    console.say(f"       {tick_command()}")
+    console.say("     This is the ONE thing here that could not be proven from the repository:")
+    console.say("     the CLI verified at 5.27.0 has no start-command flag. Until it ticks, a")
+    console.say("     household that goes quiet never finishes extracting.")
+
+    console.say("\n  5. Verify — docs/deployment.md#verify.")
     console.say(f"       curl -fsS https://{domain}/api/health")
     console.say(f"       curl -fsS https://{domain}/ | head -5      # the SPA")
 
@@ -799,9 +920,54 @@ def self_test() -> int:
     resolved = dict(settled, DATABASE_URL="postgresql://real:secret@host/db")
     checks.append(("resolved reference is NOT rewritten", plan_variables(resolved, desired) == []))
 
+    # The tick, whose whole configuration is one line of shell.
+    command = tick_command()
+    checks.append(("tick command runs under a shell", command.startswith("sh -c '")))
+    checks.append(
+        (
+            "tick command keeps $INTERNAL_TICK_SECRET unexpanded",
+            "$INTERNAL_TICK_SECRET" in command,
+        )
+    )
+    checks.append((f"tick command sends {TICK_SECRET_HEADER}", TICK_SECRET_HEADER in command))
+    checks.append(
+        ("tick targets penny's private port", f":{PENNY_PORT}{TICK_PATH}" in command)
+    )
+    # A container that EXITS is restarted by Railway, which would turn the schedule into a hot
+    # loop against an endpoint that spends money. It must sleep instead.
+    checks.append(("tick sleeps between runs rather than exiting", "sleep" in command))
+    checks.append(("a failed tick does not stop the loop", "&&" not in command))
+    checks.append(("tick curl fails loudly on a 401", "-fsS" in command))
+
+    internal_py = REPO_ROOT / "backend" / "app" / "routers" / "internal.py"
+    deadline = tick_deadline_from_source(internal_py) if internal_py.exists() else None
+    checks.append(("backend publishes a tick deadline", deadline is not None))
+    if deadline is not None:
+        checks.append(
+            (
+                f"curl timeout ({TICK_TIMEOUT_SECONDS}s) outlasts the tick deadline ({deadline}s)",
+                TICK_TIMEOUT_SECONDS > deadline,
+            )
+        )
+
+    checks.append(
+        (
+            "the tick secret is written to both penny and tick",
+            set(SHARED_SECRETS["internal_tick_secret"]) == {PENNY_SERVICE, TICK_SERVICE},
+        )
+    )
+    checks.append(
+        (
+            "penny decides every shared secret",
+            all(next(iter(keys)) == PENNY_SERVICE for keys in SHARED_SECRETS.values()),
+        )
+    )
+
     # The script must never write a variable that only restates a code default.
     written = {v.key for v in desired} | {v.key for v in gowa_vars(postgres_service="Postgres")}
-    written |= {k for k, _ in SHARED_SECRETS.values()} | {"OPENAI_API_KEY"}
+    written |= {v.key for v in tick_vars()}
+    written |= {key for keys in SHARED_SECRETS.values() for key in keys.values()}
+    written |= {"OPENAI_API_KEY"}
     checks.append(("script writes no CODE-DEFAULT key", not (written & CODE_DEFAULT_KEYS)))
 
     config_py = REPO_ROOT / "backend" / "app" / "config.py"
@@ -926,6 +1092,7 @@ def main(argv: list[str]) -> int:
         postgres = ensure_postgres(rw, console)
         ensure_gowa(rw, console, postgres_service=postgres)
         ensure_penny(rw, console, domain=args.domain, postgres_service=postgres)
+        ensure_tick(rw, console)
         ensure_volume(rw, console)
 
         console.head("Variables")
@@ -938,30 +1105,33 @@ def main(argv: list[str]) -> int:
         gowa_changed = apply_variables(
             rw, console, GOWA_SERVICE, gowa_vars(postgres_service=postgres)
         )
+        tick_changed = apply_variables(rw, console, TICK_SERVICE, tick_vars())
 
         console.head("Secrets")
-        penny_live = live_variables(rw, PENNY_SERVICE)
-        gowa_live = live_variables(rw, GOWA_SERVICE)
-        penny_secrets, gowa_secrets, minted = reconcile_secrets(
-            rw,
+        live = {
+            PENNY_SERVICE: live_variables(rw, PENNY_SERVICE),
+            GOWA_SERVICE: live_variables(rw, GOWA_SERVICE),
+            TICK_SERVICE: live_variables(rw, TICK_SERVICE),
+        }
+        secret_writes, minted = reconcile_secrets(
             console,
-            penny_live=penny_live,
-            gowa_live=gowa_live,
+            live=live,
             openai_key=os.environ.get("OPENAI_API_KEY"),
         )
-        for var in penny_secrets:
-            set_variable(rw, PENNY_SERVICE, var)
-        for var in gowa_secrets:
-            set_variable(rw, GOWA_SERVICE, var)
-        penny_changed = penny_changed or bool(penny_secrets)
-        gowa_changed = gowa_changed or bool(gowa_secrets)
+        for service, secrets in secret_writes.items():
+            for var in secrets:
+                set_variable(rw, service, var)
+        penny_changed = penny_changed or bool(secret_writes[PENNY_SERVICE])
+        gowa_changed = gowa_changed or bool(secret_writes[GOWA_SERVICE])
+        tick_changed = tick_changed or bool(secret_writes[TICK_SERVICE])
 
         if args.prune:
             console.head("Prune (variables that only restate a code default)")
-            prune(rw, console, PENNY_SERVICE, penny_live)
-            prune(rw, console, GOWA_SERVICE, gowa_live)
-            penny_changed = penny_changed or bool(plan_prune(penny_live))
-            gowa_changed = gowa_changed or bool(plan_prune(gowa_live))
+            # Only the two services that can carry one: `tick_vars()` is a start command.
+            prune(rw, console, PENNY_SERVICE, live[PENNY_SERVICE])
+            prune(rw, console, GOWA_SERVICE, live[GOWA_SERVICE])
+            penny_changed = penny_changed or bool(plan_prune(live[PENNY_SERVICE]))
+            gowa_changed = gowa_changed or bool(plan_prune(live[GOWA_SERVICE]))
 
         ensure_source(rw, console, repo=repo, branch=args.branch)
         dns = ensure_domain(rw, console, domain=args.domain)
@@ -980,6 +1150,10 @@ def main(argv: list[str]) -> int:
                 rw.write("redeploy", "--service", GOWA_SERVICE, "--yes", "--json")
             else:
                 console.step(f"{GOWA_SERVICE}: unchanged, not redeployed")
+            if tick_changed:
+                rw.write("redeploy", "--service", TICK_SERVICE, "--yes", "--json")
+            else:
+                console.step(f"{TICK_SERVICE}: unchanged, not redeployed")
 
         report_generated_secrets(console, minted)
         report_manual_steps(console, domain=args.domain, dns=dns)
