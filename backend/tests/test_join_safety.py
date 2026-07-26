@@ -322,6 +322,15 @@ def link_group(
     Used as setup by the mention tests, and it is deliberately the real path rather than an
     INSERT — a household that appeared by any other route would not prove the mention tests are
     running against the same thing production has.
+
+    IT ALSO CLOSES THE INTERVIEW, which is not tidying-up. A household born through the real
+    join path is seconds old, so the onboarding interview is open and OWNS every message in the
+    group — that is the ownership rule in `webhooks.py`, and it is what stops a family answering
+    "she's 84" with a polite @Penny from earning both a read-back and an assistant reply. The
+    tests below are all about the phase AFTER that: "a family talks all day and Penny answers
+    nothing unless addressed" is a claim about an established household, and leaving the
+    interview open here would have them assert it against a household still being introduced.
+    `test_during_onboarding_the_interview_owns_an_ordinary_message` covers the other phase.
     """
     assert post_webhook(client, join_body(chat_id)).json() == {"status": "ok", "onboarded": True}
     assert wait_for(lambda: len(sends) == 1), "the welcome never arrived"
@@ -329,7 +338,28 @@ def link_group(
     assert len(household_ids) == 1
     sends.clear()
     replies.clear()
+    close_interview(db_url, household_ids[0])
     return household_ids[0]
+
+
+def close_interview(db_url: str, household_id: UUID) -> None:
+    """Mark onboarding finished, the same way the server does when Penny stops asking.
+
+    Written straight onto the row rather than through `write_profile` because the flag is the
+    only thing under test here; `tests/test_interview.py` owns how it comes to be set.
+    """
+
+    async def update(session: AsyncSession) -> None:
+        await session.execute(
+            sa.update(Household)
+            .where(Household.id == household_id)
+            .values(care_profile={"interview_closed": True})
+        )
+        # `query` does not commit — it is built for reads. Without this the flag is rolled back
+        # when the session closes and every test below fails the way it did before the fix.
+        await session.commit()
+
+    query(db_url, update)
 
 
 # --- a message must never provision or send ----------------------------------------------
@@ -585,6 +615,51 @@ def test_a_normal_message_in_a_linked_group_is_ingested_without_a_reply(
     assert [m.text for m in stored] == ["Mum's GP rang, appointment moved"]
     assert replies == []
     assert_stays_silent(sends)
+
+
+def test_during_onboarding_the_interview_owns_an_ordinary_message(
+    db_url: str,
+    chat_id: str,
+    make_client: Callable[..., TestClient],
+    sends: list[tuple[str, str]],
+    replies: list[str],
+    joined_long_ago: None,
+) -> None:
+    """THE OTHER PHASE, and the reason `link_group` closes the interview for every test above.
+
+    For the first fourteen days Penny is still asking who she is being introduced to, so an
+    ordinary message is not noise — it is very likely the answer, and the interview takes it
+    before the mention path ever sees it. One owner per message is the whole rule: without it a
+    family who replied "she's 84" WITH a polite @Penny would get a read-back from the interview
+    and a separate reply from the assistant, to one message, in one breath.
+
+    What does NOT change is the outbound promise. The message is claimed, and the group still
+    hears nothing here, because nothing in this test can reach a model.
+    """
+    client = make_client()
+    household_id = link_group(client, db_url, chat_id, sends, replies)
+    reopen_interview(db_url, household_id)
+
+    response = post_webhook(
+        client, message_body(chat_id, "3EB0ONBOARD1", "It's for Mum, she's 84 and lives with me")
+    )
+
+    assert response.json() == {"status": "ok", "inserted": 1, "reply": "interview"}
+    stored = messages_for(db_url, household_id)
+    assert [m.text for m in stored] == ["It's for Mum, she's 84 and lives with me"]
+    assert_stays_silent(sends)
+
+
+def reopen_interview(db_url: str, household_id: UUID) -> None:
+    """Undo `link_group`'s closure, for the one test that is about the onboarding phase."""
+
+    async def update(session: AsyncSession) -> None:
+        await session.execute(
+            sa.update(Household).where(Household.id == household_id).values(care_profile={})
+        )
+        await session.commit()
+
+    query(db_url, update)
 
 
 def test_an_at_mention_in_a_linked_group_is_ingested_and_answered(

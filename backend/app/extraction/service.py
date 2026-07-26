@@ -83,7 +83,7 @@ from app.extraction.runner import OPEN_EVENTS_LIMIT, OpenEvent, extract_messages
 from app.llm.gateway import BudgetExceededError, LLMGateway
 from app.llm.recorder import DbRunRecorder
 from app.media import DERIVABLE_MESSAGE_TYPES, DERIVED_MARKER
-from app.models import Event, Household, LlmRun, Member, Message
+from app.models import Event, Household, LlmRun, Message
 from app.transcription import AUDIO_MESSAGE_TYPES, DOWNLOADABLE_PROVIDER, TRANSCRIBED_MARKER
 
 if TYPE_CHECKING:

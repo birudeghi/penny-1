@@ -221,30 +221,63 @@ def theirs(db_url: str, settings: Settings) -> Iterator[Family]:
     _delete_family(db_url, family.household_id)
 
 
+class Browser:
+    """One family's signed-in session, carried as a cookie rather than as a client.
+
+    Every request re-sends the cookie explicitly instead of relying on a jar, so two of these
+    can interleave over the same underlying client without either one inheriting the other's
+    session — which is the whole point of the symmetry test below.
+    """
+
+    def __init__(self, client: TestClient, cookie: str) -> None:
+        self._client = client
+        self._cookie = cookie
+
+    @property
+    def cookies(self) -> dict[str, str]:
+        return {SESSION_COOKIE_NAME: self._cookie}
+
+    def get(self, url: str) -> Any:
+        return self._client.get(url, cookies=self.cookies)
+
+    def post(self, url: str) -> Any:
+        return self._client.post(url, cookies=self.cookies)
+
+    def delete(self, url: str) -> Any:
+        return self._client.delete(url, cookies=self.cookies)
+
+
 @pytest.fixture
-def sign_in(settings: Settings) -> Iterator[Callable[[Family], TestClient]]:
+def sign_in(settings: Settings) -> Iterator[Callable[[Family], Browser]]:
     """A signed-in browser for one family, through the REAL login route.
 
     The cookie is minted by `POST /api/auth/login` rather than forged here, because the claim
     this file makes is about the session mechanism every other read uses — a hand-built cookie
     would be testing a mechanism nothing in production has.
+
+    ONE `TestClient`, MANY BROWSERS, and that is a constraint rather than a preference. Each
+    `TestClient` runs the app on an event loop of its own, while the connection pool underneath
+    is created once and bound to whichever loop got there first — so a second client that
+    actually reaches Postgres dies on "attached to a different loop" before the test can say
+    anything about tenancy. Two families therefore share one client and are told apart by the
+    cookie on each request, which is closer to the truth anyway: one process, two sessions.
     """
-    clients: list[TestClient] = []
+    with TestClient(penny_app) as shared:
 
-    def _sign_in(family: Family) -> TestClient:
-        client = TestClient(penny_app)
-        client.__enter__()
-        clients.append(client)
-        response = client.post(
-            "/api/auth/login", json={"username": family.username, "password": PASSWORD}
-        )
-        assert response.status_code == 204, response.text
-        assert client.cookies.get(SESSION_COOKIE_NAME)
-        return client
+        def _sign_in(family: Family) -> Browser:
+            response = shared.post(
+                "/api/auth/login", json={"username": family.username, "password": PASSWORD}
+            )
+            assert response.status_code == 204, response.text
+            cookie = shared.cookies.get(SESSION_COOKIE_NAME)
+            assert cookie
+            # Off the shared jar immediately: a cookie left on the client would ride along on
+            # the NEXT family's requests and quietly make every refusal below pass for the
+            # wrong reason.
+            shared.cookies.delete(SESSION_COOKIE_NAME)
+            return Browser(shared, cookie)
 
-    yield _sign_in
-    for client in clients:
-        client.__exit__(None, None, None)
+        yield _sign_in
 
 
 def fingerprint(response: Any) -> tuple[int, bytes, str | None]:
@@ -260,7 +293,7 @@ def fingerprint(response: Any) -> tuple[int, bytes, str | None]:
 
 
 def test_a_household_can_open_its_own_photo(
-    ours: Family, sign_in: Callable[[Family], TestClient]
+    ours: Family, sign_in: Callable[[Family], Browser]
 ) -> None:
     """The feature. A family opens the picture they sent, gets those exact bytes back, and the
     browser is told what it is — a photo that will not display is the same as no photo.
@@ -289,7 +322,7 @@ def test_a_household_can_open_its_own_photo(
 def test_another_households_message_is_indistinguishable_from_one_that_never_existed(
     ours: Family,
     theirs: Family,
-    sign_in: Callable[[Family], TestClient],
+    sign_in: Callable[[Family], Browser],
 ) -> None:
     """THE TEST THIS FILE EXISTS FOR.
 
@@ -318,7 +351,7 @@ def test_another_households_message_is_indistinguishable_from_one_that_never_exi
 def test_each_household_is_handed_its_own_photograph_and_not_the_other_one(
     ours: Family,
     theirs: Family,
-    sign_in: Callable[[Family], TestClient],
+    sign_in: Callable[[Family], Browser],
 ) -> None:
     """Both directions at once, with two live sessions in the same process.
 
@@ -337,7 +370,7 @@ def test_each_household_is_handed_its_own_photograph_and_not_the_other_one(
 def test_our_own_message_with_no_file_is_the_same_404_as_a_strangers(
     ours: Family,
     theirs: Family,
-    sign_in: Callable[[Family], TestClient],
+    sign_in: Callable[[Family], Browser],
 ) -> None:
     """Nearly every message is a text message with nothing to serve, and the answer for one of
     those must not be a different shape from the answer for someone else's photo. Otherwise the
@@ -355,7 +388,7 @@ def test_our_own_message_with_no_file_is_the_same_404_as_a_strangers(
 
 
 def test_a_row_whose_file_has_vanished_from_the_volume_is_the_same_404(
-    ours: Family, sign_in: Callable[[Family], TestClient]
+    ours: Family, sign_in: Callable[[Family], Browser]
 ) -> None:
     """The database and the volume CAN disagree — a restored snapshot, a reattached volume, a
     manual clean-up. The row still says "there are bytes", and the honest answer is the same
@@ -395,7 +428,7 @@ def test_without_a_session_there_is_no_photo_and_no_information_either(
 
 
 def test_signing_out_everywhere_closes_the_photo_too(
-    ours: Family, sign_in: Callable[[Family], TestClient]
+    ours: Family, sign_in: Callable[[Family], Browser]
 ) -> None:
     """ "Dad's phone was stolen" has to cover the photographs, and it does — but only because
     this route takes the same `CurrentHousehold` dependency as every other read rather than
@@ -416,7 +449,7 @@ def test_signing_out_everywhere_closes_the_photo_too(
 def test_a_file_that_claims_to_be_html_is_served_as_a_download_and_never_rendered(
     db_url: str,
     ours: Family,
-    sign_in: Callable[[Family], TestClient],
+    sign_in: Callable[[Family], Browser],
 ) -> None:
     """The content type came from a stranger's phone by way of a group chat.
 
@@ -454,7 +487,7 @@ def test_deleting_a_household_takes_its_photographs_off_the_volume(
     db_url: str,
     ours: Family,
     theirs: Family,
-    sign_in: Callable[[Family], TestClient],
+    sign_in: Callable[[Family], Browser],
 ) -> None:
     """ "Delete everything" has to mean the files too.
 

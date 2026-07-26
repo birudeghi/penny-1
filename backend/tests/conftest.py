@@ -1,5 +1,6 @@
 import sys
 from collections.abc import Callable, Iterator
+from types import ModuleType
 
 import pytest
 from fastapi.testclient import TestClient
@@ -32,17 +33,30 @@ def settings_override(monkeypatch: pytest.MonkeyPatch) -> Callable[..., Settings
     leave every importer still calling the real one; patch each binding too.
     """
 
+    # Bound ONCE, before any patching, and reused across every call. `get_settings` read inside
+    # `_override` would be re-read on each iteration, and this module's own binding is one of the
+    # ones about to be patched — so the comparison target would silently become the lambda after
+    # the first match and every module later in sys.modules would be skipped.
+    real = get_settings
+    # THE MODULES ARE DISCOVERED ONCE AND REMEMBERED, which is what makes a SECOND call work.
+    # Re-running the `is real` scan on the second call finds nothing: every module it wants was
+    # patched by the first call and no longer points at the real function. A test that overrides
+    # twice — build a household against a volume, then ask what happens with no volume at all —
+    # would therefore keep the FIRST settings everywhere except `app.config`, and quietly assert
+    # against a configuration it thought it had replaced.
+    targets: list[ModuleType] = []
+
     def _override(**kwargs: object) -> Settings:
         settings = Settings(_env_file=None, **kwargs)
-        # Bound to a LOCAL before any patching. `get_settings` as a global would be re-read on
-        # every iteration, and this module's own binding is one of the ones about to be
-        # patched — so the comparison target would silently become the lambda after the first
-        # match and every module later in sys.modules would be skipped.
-        real = get_settings
+        if not targets:
+            targets.extend(
+                module
+                for module in list(sys.modules.values())
+                if getattr(module, "get_settings", None) is real
+            )
         monkeypatch.setattr(app.config, "get_settings", lambda: settings)
-        for module in list(sys.modules.values()):
-            if getattr(module, "get_settings", None) is real:
-                monkeypatch.setattr(module, "get_settings", lambda: settings)
+        for module in targets:
+            monkeypatch.setattr(module, "get_settings", lambda: settings)
         return settings
 
     return _override
