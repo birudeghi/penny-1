@@ -8,24 +8,37 @@
  * boxes to separate its parts.
  */
 
+/*
+ * A PILL, not a link, and it matches "Load older entries" rather than the app's `--accent`.
+ * This control sits inside `.record`, which has its own palette — `--penny` navy on `--rule`,
+ * white surfaces on a tinted ground — and a purple text link would have been the one element on
+ * the screen belonging to a different design system. 44px because it is a primary action, and
+ * on a phone it is a thumb that presses it.
+ */
 .trigger {
-  background: none;
-  border: 0;
-  padding: 2px 4px;
-  margin: 0 -4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  min-height: 44px;
+  padding: 8px 16px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--surface);
   font: inherit;
-  font-size: 14px;
-  color: var(--accent);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--penny);
   cursor: pointer;
-  border-radius: var(--radius);
+  transition: background-color 120ms;
 }
 
 .trigger:hover {
-  text-decoration: underline;
+  background: var(--band);
 }
 
 .trigger:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--penny);
   outline-offset: 2px;
 }
 

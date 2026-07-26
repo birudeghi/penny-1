@@ -26,6 +26,7 @@ import { Link } from 'react-router'
 
 import { useFeed, useMembers, useSession, useUpcoming } from '../api/queries'
 import { ErrorState, FeedSkeleton, RereadBanner } from '../components'
+import { ClinicalSummary } from '../components/clinical-summary'
 import { ContextColumn, MobileFacts, MobileReference } from '../components/context-column'
 import { PersonHeader } from '../components/person-header'
 import { Timeline } from '../components/timeline'
@@ -83,6 +84,24 @@ export function FeedRoute() {
 
           <div className="flex min-w-0 gap-14">
             <div className="min-w-0 flex-1">
+              {/*
+                TOP RIGHT OF THE RECORD, above everything, and open only when asked.
+
+                A summary is a READING of the record at a moment, not part of it — leaving one
+                expanded above the timeline would put a stale interpretation between the family
+                and the thing it interpreted, and the interpretation is the part allowed to be
+                wrong. So the control sits here and the document it produces unfolds under it.
+
+                It is also the only button in the app that spends money on purpose: one press is
+                one model call over a year of history, which is why generating is a mutation and
+                never a query. A query would fire on mount, on remount, on window focus and on
+                the sixty-second poll, and the server's one-a-day limit would turn every one of
+                those into a 429 the family did not cause.
+              */}
+              <div className="mb-6 flex justify-end">
+                <ClinicalSummary />
+              </div>
+
               {/* A failed refetch renders above whatever is already on screen rather than
                   replacing it: a family reading last week's appointments should not lose them
                   because a poll timed out. */}

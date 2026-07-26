@@ -649,7 +649,12 @@ async def _read_events(
                 Event.occurred_at >= period.start,
                 Event.occurred_at <= period.end,
             )
-            .order_by(Event.occurred_at.desc(), Event.id.desc())
+            # `created_at` before `id`, the same tiebreak the feed uses and for the same
+            # reason: ids are `uuid4`, so day-precision entries — which all sit at midnight —
+            # were ordered at random. Here that also decides which ones survive the
+            # REPORT_MAX_EVENTS cut and what order the model reads them in, so a summary of a
+            # busy day was assembled from an arbitrary subset in an arbitrary sequence.
+            .order_by(Event.occurred_at.desc(), Event.created_at.desc(), Event.id.desc())
             .limit(REPORT_MAX_EVENTS)
         )
     ).all()
@@ -676,7 +681,7 @@ async def _read_upcoming(
                 Event.deleted_at.is_(None),
                 Event.occurred_at > after,
             )
-            .order_by(Event.occurred_at.asc(), Event.id.asc())
+            .order_by(Event.occurred_at.asc(), Event.created_at.asc(), Event.id.asc())
             .limit(REPORT_MAX_UPCOMING)
         )
     ).all()

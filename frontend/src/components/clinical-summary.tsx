@@ -104,9 +104,9 @@ function triggerLabel({
   generating: boolean
   hasReport: boolean
 }): string {
-  if (open) return 'Hide clinical summary ↑'
-  if (generating) return 'Writing clinical summary…'
-  return hasReport ? 'Show clinical summary ↧' : 'Generate clinical summary ↧'
+  if (open) return 'Hide summary ↑'
+  if (generating) return 'Writing summary…'
+  return hasReport ? 'Show summary ↧' : 'Get summary ↧'
 }
 
 function isWriting(report: Report | undefined): boolean {
