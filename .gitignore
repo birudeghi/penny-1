@@ -24,3 +24,6 @@ dist/
 .DS_Store
 .idea/
 .vscode/
+
+# Agent worktrees. Transient, and a `git add -A` would otherwise commit five checkouts.
+.claude/worktrees/
