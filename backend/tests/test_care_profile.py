@@ -277,3 +277,71 @@ def test_closing_the_interview_does_not_change_the_hash() -> None:
     closed = open_.model_copy(update={"interview_closed": True})
     assert cp.brief_hash(open_) == cp.brief_hash(closed)
     assert "interview" not in cp.render_brief(closed, participants=[], timezone="UTC").lower()
+
+
+# --- the four on their way to the screen -----------------------------------------------
+
+
+def _row(**profile: object):
+    """A household row as `to_household` sees it — attributes, not a model."""
+
+    class _Household:
+        id = "0d4f8b2e-1c8a-4c1e-9f6a-3b7d2e5a91cc"
+        name = "The Aldens"
+        care_recipient_name = "Juno"
+        timezone = "Europe/London"
+        care_profile = profile
+
+    return _Household()
+
+
+def test_the_four_vitals_reach_the_api_with_their_dates() -> None:
+    """The interview captures these with great care; this is the only thing that shows them.
+
+    They were captured and never exposed for a while, which is the quiet version of not having
+    built the feature at all: the prompt refuses to guess an NHS number, the profile stores it,
+    and the band a paramedic would read rendered four blanks regardless.
+    """
+    from app.schemas import to_household
+
+    out = to_household(
+        _row(
+            allergies={"value": "Penicillin", "confirmed_at": "2026-03-14"},
+            baseline={"value": "Mobile with a frame indoors"},
+        )
+    )
+
+    assert out.vitals.allergies is not None
+    assert out.vitals.allergies.value == "Penicillin"
+    assert out.vitals.allergies.confirmed_at == "2026-03-14"
+    # Given without a date, and it stays without one rather than borrowing today's.
+    assert out.vitals.baseline is not None
+    assert out.vitals.baseline.confirmed_at is None
+
+
+def test_an_unanswered_vital_is_null_and_its_key_is_still_there() -> None:
+    """ "Nobody has told us" and "she has no allergies" are different facts.
+
+    Only one of them is safe to act on, and a key that disappeared when empty would let a client
+    turn the first into the second by accident. All four are always present.
+    """
+    from app.schemas import to_household
+
+    serialised = to_household(_row()).model_dump()["vitals"]
+
+    assert set(serialised) == {"nhs_number", "allergies", "respect_form", "baseline"}
+    assert all(value is None for value in serialised.values())
+
+
+def test_a_malformed_profile_costs_the_vitals_and_not_the_session() -> None:
+    """`GET /api/me` is the request the whole app boots on: it must not 500 over a bad row."""
+    from app.schemas import to_household
+
+    class _Bad:
+        id = "0d4f8b2e-1c8a-4c1e-9f6a-3b7d2e5a91cc"
+        name = "The Aldens"
+        care_recipient_name = "Juno"
+        timezone = "Europe/London"
+        care_profile = ["not", "a", "dict"]
+
+    assert to_household(_Bad()).vitals.allergies is None

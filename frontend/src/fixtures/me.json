@@ -3,7 +3,16 @@
     "id": "0d4f8b2e-1c8a-4c1e-9f6a-3b7d2e5a91cc",
     "name": "The Doyles",
     "care_recipient_name": "Margaret",
-    "timezone": "Europe/London"
+    "timezone": "Europe/London",
+    "vitals": {
+      "nhs_number": null,
+      "allergies": { "value": "Penicillin", "confirmed_at": "2026-03-14" },
+      "respect_form": { "value": "In the folder by the front door", "confirmed_at": null },
+      "baseline": {
+        "value": "Mobile with a frame indoors, breathless on one flight of stairs",
+        "confirmed_at": "2026-05-02"
+      }
+    }
   },
   "counts": {
     "events": 41,

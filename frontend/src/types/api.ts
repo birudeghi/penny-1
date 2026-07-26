@@ -156,11 +156,39 @@ export interface UpcomingPage {
   events: Event[]
 }
 
+/**
+ * One clinical fact and the day somebody last said it was still true.
+ *
+ * `confirmed_at` is a string and not a Date because the server does not parse it either: it
+ * arrives from a WhatsApp reply through a language model, so "Jan 2026" and "last year's review"
+ * are as likely as an ISO date. Rendered verbatim, never reformatted — a date this app tidied
+ * would be a date this app half-understood.
+ */
+export interface Vital {
+  value: string
+  confirmed_at: string | null
+}
+
+/**
+ * The four a clinician reads first. Every key is always present; null means nobody has said.
+ *
+ * That distinction is the whole point of the type. "We do not know her allergies" and "she has
+ * no allergies" are different facts and only one of them is safe to act on, so the band renders
+ * every row whether or not it is filled and an optional key would let the two blur together.
+ */
+export interface Vitals {
+  nhs_number: Vital | null
+  allergies: Vital | null
+  respect_form: Vital | null
+  baseline: Vital | null
+}
+
 export interface Household {
   id: string
   name: string
   care_recipient_name: string
   timezone: string
+  vitals: Vitals
 }
 
 /** `GET /api/me` — the session probe the app boots on. 401 here is normal, not an error. */

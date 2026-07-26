@@ -130,7 +130,11 @@ export function FeedRoute() {
               ) : null}
             </div>
 
-            <ContextColumn upcoming={upcoming.data?.events} timeZone={timeZone} />
+            <ContextColumn
+              upcoming={upcoming.data?.events}
+              vitals={household?.vitals}
+              timeZone={timeZone}
+            />
           </div>
         </div>
       </div>

@@ -12,9 +12,9 @@ built, it says so.
 
 Every inbound message arrives at one webhook, is normalised to one contract, and is inserted by
 one function that resolves which household it belongs to. After the webhook has answered, three
-kinds of background work may run against that message: a voice note is transcribed, the
-onboarding interview may read it, and extraction turns a batch of messages into care events. A
-scheduled tick catches the households that have gone quiet. Everything Penny says goes back out
+kinds of background work may run against that message: a voice note is transcribed and a photo
+is stored and described, the onboarding interview may read it, and extraction turns a batch of
+messages into care events. A scheduled tick catches the households that have gone quiet. Everything Penny says goes back out
 through one hardened door.
 
 ## System
@@ -43,7 +43,7 @@ flowchart TB
                 direction TB
                 middleware["JSON logging · error handlers<br/>dev-only CORS"]
                 session["Session and tenant boundary<br/>signed HttpOnly cookie carrying<br/>household_id + session_version"]
-                readapi["Feed · upcoming · events<br/>household · members · auth"]
+                readapi["Feed · upcoming · events<br/>household + vitals · members<br/>media · reports · auth"]
                 importapi["Import — preview, start, poll"]
                 waapi["WhatsApp — status, link, relink"]
                 webhook["Webhook — raw-body HMAC<br/>join gates · ingest · dispatch"]
@@ -66,6 +66,8 @@ flowchart TB
             subgraph work["Background work — after the 200"]
                 direction TB
                 transcribe["Transcription<br/>download media, transcribe,<br/>mark the payload"]
+                derive["Media derivation<br/>store the bytes, describe them,<br/>mark the excerpt derived"]
+                reports["Report generation<br/>one call over a year,<br/>every claim cited"]
                 interview["Onboarding interview<br/>read the answer, write the<br/>care profile, say it back"]
                 assistant["@-mention reply<br/>answer from the record only"]
                 extraction["Extraction service<br/>advisory lock · cadence gate<br/>budget guard · bounded batch"]
@@ -93,6 +95,7 @@ flowchart TB
         tick["tick service<br/>cron → POST /api/internal/tick"]
 
         postgres[("PostgreSQL 16<br/>households · members · whatsapp_links<br/>known_groups · messages · llm_runs<br/>events · imports · reports<br/><br/>household_id is the tenant key<br/>unique indexes enforce replay safety")]
+        volume[("Media volume<br/>one directory per household<br/>the unit of deletion")]
     end
 
     family -->|HTTPS| screens
@@ -109,6 +112,7 @@ flowchart TB
     seam -->|messages + members| postgres
 
     webhook -.->|after the response| transcribe
+    webhook -.->|after the response| derive
     webhook -.->|after the response| interview
     webhook -.->|after the response| assistant
     webhook -.->|after the response| extraction
@@ -128,6 +132,12 @@ flowchart TB
     interview --> gateway
     assistant --> gateway
     transcribe --> gateway
+    derive --> gateway
+    reports --> gateway
+    derive -->|fetch bytes| media
+    derive -->|write, per household| volume
+    readapi -->|serve bytes, 404 on a stranger| volume
+    readapi --> reports
     gateway -->|strict JSON schema| openai
     openai -->|structured output + usage| gateway
     gateway -->|audit every attempt| postgres
@@ -142,7 +152,7 @@ flowchart TB
 
     class middleware,session,readapi,importapi,waapi,webhook,tickapi,spa active;
     class family,whatsapp,openai external;
-    class postgres,chatstore store;
+    class postgres,chatstore,volume store;
     class profile,outbound,seam keystone;
 ```
 
@@ -266,12 +276,46 @@ and written to both sides, with a drift warning when they disagree.
 > command. It fails visibly rather than silently, and `report_manual_steps` prints the command to
 > paste. Confirm before relying on it.
 
+## Media
+
+An image or a document arrives with no text at all, so two independent things happen to it and
+neither waits on the other.
+
+The **bytes** are downloaded from GOWA and written to a per-household directory on a Railway
+volume. `household_id` is typed `UUID` everywhere in `media.py` — that is the security control
+rather than a nicety, because `str(UUID)` can only produce `[0-9a-f-]` and no spelling of the
+argument escapes the root. `GET /api/media/{message_id}` serves them back through the same
+`CurrentHousehold` dependency every other read uses, and answers a stranger's message id with a
+404 **byte-identical** to the one a random UUID gets: a different body, length or header would
+make the route an existence oracle. Deleting a household takes its directory with it.
+
+The **words** are a model's description, and they carry `derived_from_media: true` on the excerpt
+so the record never attributes to Sarah a sentence Sarah did not write. The two halves are
+independent in both directions: a deployment with no volume configured keeps no files and still
+reads the description into the timeline, which is the state every deploy without a volume is in.
+
+Extraction withholds a media message until its description lands or the grace window expires, the
+same rule and the same reason as a voice note.
+
+## Reports
+
+`POST /api/reports` runs one call over a year of the record and returns a document whose every
+claim carries citations back to the entries behind it; the server drops any citation that did not
+resolve and strips its marker out of the prose, so nothing rendered points at nothing.
+
+Generating is a **mutation and never a query**. A query fires on mount, on remount, on window
+focus and on a poll, and the one-a-day limit would turn each of those into a 429 the family did
+not cause. The panel is closed until somebody asks, because a summary is a reading of the record
+rather than part of it, and leaving one open above the timeline puts a stale interpretation
+between the family and the thing it interpreted.
+
 ## Specified but not built
 
-- **Reports.** The `reports` table, the API contract and `frontend/src/routes/report.tsx` all
-  exist; no router generates one. The designer's clinical summary panel is built against it.
-- **Media storage.** `gowa.download_media` is used by transcription, so the bytes are reachable,
-  but images and documents still ingest as a type with no text and nothing is persisted.
+- **`claude-agent-sdk`.** Deferred deliberately. The extraction and assistant paths use the
+  OpenAI Responses API with strict structured outputs; a session-based agent is a different
+  shape and was not worth carrying while the record itself was still being built.
+- **The `imports.py` module.** Superseded by the shared `ingest_messages` seam and pending
+  deletion.
 
 ## Architectural invariants
 

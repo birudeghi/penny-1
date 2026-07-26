@@ -220,13 +220,35 @@ The session probe the app boots on.
     "id": "0d4f8b2e-1c8a-4c1e-9f6a-3b7d2e5a91cc",
     "name": "The Shaws",
     "care_recipient_name": "Margaret",
-    "timezone": "Europe/London"
+    "timezone": "Europe/London",
+    "vitals": {
+      "nhs_number": null,
+      "allergies": { "value": "Penicillin", "confirmed_at": "2026-03-14" },
+      "respect_form": { "value": "In the folder by the front door", "confirmed_at": null },
+      "baseline": { "value": "Mobile with a frame indoors", "confirmed_at": "2026-05-02" }
+    }
   },
   "counts": { "events": 143, "messages": 2011 }
 }
 ```
 
 **401** when signed out — this is normal on first load, not an error to report.
+
+#### `vitals`
+
+The four a clinician reads first, filled by the onboarding interview and returned on this
+endpoint and on `PATCH /api/household`.
+
+**All four keys are always present.** `null` means nobody has told us; it never means the key
+was omitted. That distinction is the reason the object exists in this shape: "we do not know her
+allergies" and "she has no allergies" are different facts, only one is safe to act on, and a key
+that vanished when empty would let a client collapse the two. Clients must render every row,
+filled or not.
+
+`confirmed_at` is a **free string or null**, not a date. The value reaches the server from a
+WhatsApp reply through a language model, so `"Jan 2026"` and `"last year's review"` are as likely
+as `"2026-03-14"`. Render it verbatim; do not parse it, and do not substitute today's date for a
+null — a fact that may be two years old must not look like it was checked this morning.
 
 ---
 

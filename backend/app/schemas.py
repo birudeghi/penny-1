@@ -27,6 +27,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, ValidationError
 
+from app import care_profile
 from app.care_profile import CareProfile
 from app.extraction.runner import normalise_precision
 
@@ -398,11 +399,41 @@ class EventPatch(BaseModel):
 # --- household ----------------------------------------------------------------------------
 
 
+class VitalOut(BaseModel):
+    """One clinical fact and the day somebody last said it was still true.
+
+    `confirmed_at` is a free string, not a date, and it crosses the wire as one — the value came
+    from a WhatsApp reply through a language model, so "Jan 2026" and "last year's review" are
+    as common as an ISO date. The band renders it verbatim; nothing parses it.
+    """
+
+    value: str
+    confirmed_at: str | None = None
+
+
+class HouseholdVitals(BaseModel):
+    """THE FOUR READ IN A HURRY, and all four keys are always present.
+
+    Absent means null, never missing. The band on the record renders every row whether or not it
+    is filled, because "nobody has told us her allergies" is one of the most important sentences
+    that page can say and it is only visible if the label is — so a key that vanished when empty
+    would let the client mistake a gap for a fact. This is the exact opposite of what the care
+    brief does with the same four fields, and `care_profile._vitals_line` says why the two
+    readers want opposite things from the same silence.
+    """
+
+    nhs_number: VitalOut | None = None
+    allergies: VitalOut | None = None
+    respect_form: VitalOut | None = None
+    baseline: VitalOut | None = None
+
+
 class HouseholdOut(BaseModel):
     id: UUID
     name: str
     care_recipient_name: str
     timezone: str
+    vitals: HouseholdVitals
 
 
 def to_household(row: Any) -> HouseholdOut:
@@ -410,12 +441,23 @@ def to_household(row: Any) -> HouseholdOut:
 
     One function so the two can never drift — and so neither can ever include
     `password_hash` by reaching for `model_validate(row, from_attributes=True)`.
+
+    The vitals are read through `care_profile.load`, which is what makes a malformed stored
+    profile a household with four blanks rather than a 500 on the screen a family opens first.
     """
+    profile = care_profile.load(row)
     return HouseholdOut(
         id=row.id,
         name=row.name,
         care_recipient_name=row.care_recipient_name,
         timezone=row.timezone,
+        vitals=HouseholdVitals(
+            **{
+                field: VitalOut(value=vital.value, confirmed_at=vital.confirmed_at)
+                for field in ("nhs_number", "allergies", "respect_form", "baseline")
+                if (vital := getattr(profile, field)) and vital.value
+            }
+        ),
     )
 
 
