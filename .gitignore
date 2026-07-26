@@ -27,3 +27,7 @@ dist/
 
 # Agent worktrees. Transient, and a `git add -A` would otherwise commit five checkouts.
 .claude/worktrees/
+
+# gstack's per-session scratch. `terminal-internal-token` is a live credential for the local
+# agent process, and a `git add -A` mid-rebase is exactly how it got committed once already.
+.gstack/
