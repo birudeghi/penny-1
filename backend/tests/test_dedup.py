@@ -271,3 +271,42 @@ def test_a_human_edit_is_permanent() -> None:
     edited = {"kind": "appointment", "edited_at": "2026-07-18T10:00:00Z", "details": {}}
     incoming = FakeExtractedEvent(kind="appointment", outcome="Bloods taken")
     assert decide_merge(edited, incoming) is MergeDecision.NO_CHANGE
+
+
+# --- the empty-first delivery that silenced Penny on the first real group ------------------
+
+
+def test_a_text_message_with_no_text_is_skipped_even_when_it_carries_a_payload() -> None:
+    """REGRESSION, from production. GOWA delivered one message twice under one id.
+
+    The first delivery had no body, the second had the words, and both carried the envelope
+    payload GOWA puts on everything. `_is_empty` required an ABSENT payload, so the empty one
+    was stored, the real one was rejected as a duplicate by the provider_message_id index, and
+    background work — which runs on inserted rows only — saw an empty string and stayed silent.
+
+    Skipping the empty delivery is what lets the second one insert normally and be answered.
+    """
+    from datetime import UTC, datetime
+
+    from app.ingest.contract import InboundMessage
+    from app.ingest.seam import _is_empty
+
+    def message(text: str | None) -> InboundMessage:
+        return InboundMessage(
+            provider="gowa",
+            provider_message_id="3A591AB2007610F111E1",
+            sent_at=datetime(2026, 7, 26, 7, 1, tzinfo=UTC),
+            sender_wa_jid="447756792238@s.whatsapp.net",
+            sender_wa_lid="84855887015968@lid",
+            sender_display_name="Owen YK",
+            message_type="text",
+            text=text,
+            # The envelope GOWA sends on EVERY delivery. Its presence is why the old guard never
+            # fired; it is metadata about the message, never content of it.
+            payload={"id": "3A591AB2007610F111E1", "chat_id": "1203634@g.us"},
+        )
+
+    assert _is_empty(message(None)) is True
+    assert _is_empty(message("")) is True
+    assert _is_empty(message("   ")) is True
+    assert _is_empty(message("@Penny when is her appointment?")) is False

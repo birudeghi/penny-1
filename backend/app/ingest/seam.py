@@ -132,10 +132,25 @@ def content_hash(
 
 
 def _is_empty(message: InboundMessage) -> bool:
-    """Nothing to store: no text, no media, no provider payload to re-extract from later."""
-    return (
-        message.message_type == "text" and not normalise_text(message.text) and not message.payload
-    )
+    """Nothing to store: a text message with no text in it.
+
+    THE PAYLOAD DOES NOT MAKE IT NON-EMPTY, and that clause cost a live deployment. It used to
+    read `and not message.payload`, on the reasoning that a payload might hold something worth
+    re-extracting later. GOWA sends an envelope on every delivery, so the clause was never false
+    in production and no text message was ever skipped.
+
+    What that allowed, observed on the first real group chat: GOWA delivered one `@Penny` message
+    TWICE under a single `provider_message_id` — first with no body, then 1.1 seconds later with
+    the words. The empty one won the race, was stored with `text` NULL, and the one carrying the
+    message was correctly rejected by the `(household_id, provider_message_id)` index as a
+    duplicate. Background work runs on INSERTED rows only, so the interview read an empty string,
+    fell under `MIN_ANSWER_CHARS`, and said nothing. The family saw silence and the record kept a
+    row with no words in it.
+
+    A `text` message with no text has nothing to put on a timeline whatever rides alongside it.
+    Media arrives under its own `message_type` and is untouched by this.
+    """
+    return message.message_type == "text" and not normalise_text(message.text)
 
 
 async def _resolve_household(session: AsyncSession, group_external_id: str) -> UUID:
