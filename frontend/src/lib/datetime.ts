@@ -39,6 +39,22 @@ export function formatTime(iso: string, timeZone: string): string {
   )
 }
 
+/**
+ * "Sat 25 Jul" — the two-line date the timeline prints in its left gutter.
+ *
+ * No year, deliberately: the timeline prints the year once, where it changes, so twenty entries
+ * from the same summer do not repeat it twenty times. `formatTimelineYear` is the other half.
+ */
+export function formatTimelineDate(iso: string, timeZone: string): string {
+  return formatter(timeZone, { weekday: 'short', day: 'numeric', month: 'short' })
+    .format(new Date(iso))
+    .replace(',', '')
+}
+
+export function formatTimelineYear(iso: string, timeZone: string): string {
+  return formatter(timeZone, { year: 'numeric' }).format(new Date(iso))
+}
+
 /** "Tue 14 Jul 2026, 21:04" — the compact stamp the import wizard checks its guess against. */
 export function formatEvidenceStamp(iso: string, timeZone: string): string {
   return formatter(timeZone, {

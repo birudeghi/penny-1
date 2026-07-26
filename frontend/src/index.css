@@ -85,61 +85,77 @@
   }
 }
 
-body {
-  margin: 0;
-  min-height: 100svh;
-}
+/*
+ * The element defaults, in `@layer base` — the same layer `design.css` declares.
+ *
+ * They used to be unlayered, which put them above every Tailwind utility no matter how specific:
+ * `h1 { font-size: 28px }` here silently beat `text-[30px]` on the record's heading, and
+ * `a { color: var(--accent) }` beat `text-penny` on its links, because an unlayered rule outranks
+ * a layered one whatever its specificity. Moving them into `base` puts them back underneath the
+ * utilities and leaves them exactly where they were relative to everything else: the CSS Modules
+ * are unlayered and still win, and the scoped reset in `design.css` is more specific and still
+ * wins inside `.record`.
+ *
+ * `:root` above stays outside the layer on purpose — it is the token sheet the CSS-Module screens
+ * read, and nothing in the design system competes for those names.
+ */
+@layer base {
+  body {
+    margin: 0;
+    min-height: 100svh;
+  }
 
-h1,
-h2,
-h3 {
-  font-family: var(--heading);
-  font-weight: 600;
-  color: var(--text-h);
-}
+  h1,
+  h2,
+  h3 {
+    font-family: var(--heading);
+    font-weight: 600;
+    color: var(--text-h);
+  }
 
-h1 {
-  font-size: 28px;
-  line-height: 120%;
-  letter-spacing: -0.5px;
-  margin: 0 0 8px;
-}
+  h1 {
+    font-size: 28px;
+    line-height: 120%;
+    letter-spacing: -0.5px;
+    margin: 0 0 8px;
+  }
 
-h2 {
-  font-size: 20px;
-  line-height: 125%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-}
+  h2 {
+    font-size: 20px;
+    line-height: 125%;
+    letter-spacing: -0.24px;
+    margin: 0 0 8px;
+  }
 
-h3 {
-  font-size: 17px;
-  line-height: 130%;
-  margin: 0 0 4px;
-}
+  h3 {
+    font-size: 17px;
+    line-height: 130%;
+    margin: 0 0 4px;
+  }
 
-p {
-  margin: 0;
-}
+  p {
+    margin: 0;
+  }
 
-a {
-  color: var(--accent);
-}
+  a {
+    color: var(--accent);
+  }
 
-code {
-  font-family: var(--mono);
-  font-size: 14px;
-  line-height: 135%;
-  padding: 2px 6px;
-  border-radius: 4px;
-  color: var(--text-h);
-  background: var(--code-bg);
-}
+  code {
+    font-family: var(--mono);
+    font-size: 14px;
+    line-height: 135%;
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: var(--text-h);
+    background: var(--code-bg);
+  }
 
-input,
-select,
-button,
-textarea {
-  font: inherit;
-  color: inherit;
+  input,
+  select,
+  button,
+  textarea {
+    font: inherit;
+    color: inherit;
+  }
 }

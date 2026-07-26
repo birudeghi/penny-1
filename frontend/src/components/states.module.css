@@ -1,41 +1,9 @@
-/* Empty, loading and error states. Same box, three temperaments. */
-
-.empty {
-  border: 1px dashed var(--border);
-  border-radius: var(--radius);
-  background: var(--surface-2);
-  padding: 28px 24px;
-  text-align: center;
-  color: var(--text);
-}
-
-.emptyTitle {
-  margin: 0 0 6px;
-  font-size: 17px;
-}
-
-.emptyBody {
-  margin: 0 auto;
-  max-width: 44ch;
-  font-size: 15px;
-  line-height: 150%;
-}
-
-.emptyAction {
-  margin-top: 14px;
-}
-
-/* Quiet variant for the upcoming panel, which sits inside a box of its own already. */
-.inline {
-  border: 0;
-  background: transparent;
-  padding: 6px 0;
-  text-align: left;
-}
-
-.inline .emptyBody {
-  margin-left: 0;
-}
+/*
+ * Loading and error states. Same box, two temperaments.
+ *
+ * The empty states that lived here went with the CSS-Module feed: the record's own empty state is
+ * one sentence and no box at all, which is a product decision — see `components/timeline.tsx`.
+ */
 
 .error {
   border: 1px solid var(--danger);

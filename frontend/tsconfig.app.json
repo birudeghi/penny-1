@@ -8,6 +8,14 @@
     "allowArbitraryExtensions": true,
     "skipLibCheck": true,
 
+    /* Mirrors the alias in `vite.config.ts`. Both halves are required: this one is what makes
+       `tsc -b` resolve `@/components/timeline`, the Vite one is what makes the bundle do it.
+       No `baseUrl` — TypeScript 6 deprecates it, and without one these paths are resolved
+       relative to this file, which is what we wanted anyway. */
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+
     /* Bundler mode */
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
