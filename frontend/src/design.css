@@ -1,0 +1,292 @@
+/*
+ * The care record's design system, ported whole from the Next.js prototype.
+ *
+ * This file IS the design: every colour the timeline uses is a token declared here, in oklch, and
+ * nothing downstream is allowed to invent a hex. Ported wholesale rather than cherry-picked
+ * because the tokens are a set — the washes are lightness-matched against the ground, so taking
+ * three of them and leaving the rest produces a palette that is subtly, unfixably wrong.
+ *
+ * TWO THINGS DIFFER FROM THE SOURCE, both because this is a Vite SPA and not a Next.js app.
+ *
+ * 1. NO PREFLIGHT. Tailwind's base reset is element-scoped — `h1 { font-size: inherit }`,
+ *    `ul { list-style: none }`, `button { background: transparent }` — so importing it would
+ *    silently restyle the five screens (login, welcome, import, settings, report) that are still
+ *    CSS Modules and still rely on user-agent defaults. Instead the reset is reproduced inside
+ *    `.record` below, applying to the ported subtree and nothing else. The day the rest of the
+ *    app moves over, this block is deleted and `@import "tailwindcss"` replaces the two partial
+ *    imports.
+ *
+ * 2. NO `shadcn/tailwind.css`. The prototype pulled the radix-luma style sheet out of the
+ *    `shadcn` CLI package; a CLI is not a runtime dependency of a production bundle. The only
+ *    part the ported components actually use is a handful of custom variants, declared here.
+ */
+
+@layer theme, base, components, utilities;
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/utilities.css' layer(utilities);
+@import 'tw-animate-css';
+
+/*
+ * The variants shadcn's own style sheet would have defined. Radix reports state on
+ * `data-state`/`data-orientation`, and Tailwind's bare `data-open:` shorthand means
+ * `[data-open]` — an attribute Radix never writes — so without these every `data-open:`
+ * and `data-active:` in the copied components would compile to a selector that can never match.
+ */
+@custom-variant data-open (&[data-state="open"]);
+@custom-variant data-closed (&[data-state="closed"]);
+@custom-variant data-active (&[data-state="active"]);
+@custom-variant data-horizontal (&[data-orientation="horizontal"]);
+@custom-variant data-vertical (&[data-orientation="vertical"]);
+
+/*
+ * Dark is opt-in by class, never by `prefers-color-scheme`. The record is a document: it is light
+ * unless somebody asks otherwise. Nothing sets `.dark` yet — the prototype's theme switcher was
+ * not part of this port — so the tokens below are the palette this build actually renders in.
+ * The dark set is kept regardless, because a half-ported token system is how a theme toggle ends
+ * up shipping with four colours missing.
+ */
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * No webfont request. The prototype loaded Inter through `next/font`; a care record that makes no
+ * other third-party call at runtime should not start with a font CDN, so Inter is used when the
+ * reader's machine already has it and the system UI face otherwise. Both are the same metrics
+ * class, so nothing in the layout moves.
+ */
+@theme {
+  --font-sans:
+    Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-heading: var(--font-sans);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+}
+
+:root {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.205 0.005 250);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.205 0.005 250);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.205 0.005 250);
+  --primary: oklch(0.34 0.062 250);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.968 0.003 250);
+  --secondary-foreground: oklch(0.28 0.01 250);
+  --muted: oklch(0.968 0.003 250);
+  --muted-foreground: oklch(0.55 0.012 250);
+  --accent: oklch(0.968 0.003 250);
+  --accent-foreground: oklch(0.28 0.01 250);
+  --destructive: oklch(0.52 0.135 38);
+  --border: oklch(0.918 0.004 250);
+  --input: oklch(0.918 0.004 250);
+  --ring: oklch(0.34 0.062 250);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.205 0.005 250);
+  --sidebar-primary: oklch(0.34 0.062 250);
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent: oklch(0.968 0.003 250);
+  --sidebar-accent-foreground: oklch(0.28 0.01 250);
+  --sidebar-border: oklch(0.918 0.004 250);
+  --sidebar-ring: oklch(0.34 0.062 250);
+}
+
+.dark {
+  --background: oklch(0.16 0.006 250);
+  --foreground: oklch(0.97 0.002 250);
+  --card: oklch(0.21 0.008 250);
+  --card-foreground: oklch(0.97 0.002 250);
+  --popover: oklch(0.21 0.008 250);
+  --popover-foreground: oklch(0.97 0.002 250);
+  --primary: oklch(0.78 0.062 250);
+  --primary-foreground: oklch(0.18 0.01 250);
+  --secondary: oklch(0.27 0.008 250);
+  --secondary-foreground: oklch(0.97 0.002 250);
+  --muted: oklch(0.27 0.008 250);
+  --muted-foreground: oklch(0.7 0.012 250);
+  --accent: oklch(0.27 0.008 250);
+  --accent-foreground: oklch(0.97 0.002 250);
+  --destructive: oklch(0.7 0.14 38);
+  --border: oklch(1 0 0 / 12%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.62 0.05 250);
+  --sidebar: oklch(0.21 0.008 250);
+  --sidebar-foreground: oklch(0.97 0.002 250);
+  --sidebar-primary: oklch(0.78 0.062 250);
+  --sidebar-primary-foreground: oklch(0.18 0.01 250);
+  --sidebar-accent: oklch(0.27 0.008 250);
+  --sidebar-accent-foreground: oklch(0.97 0.002 250);
+  --sidebar-border: oklch(1 0 0 / 12%);
+  --sidebar-ring: oklch(0.62 0.05 250);
+}
+
+/* ── Penny brand layer ──────────────────────────────────────────
+   The care record is a document before it is an app: paper ground,
+   hairline rules, and one hue per entry kind carried on a small
+   timeline node rather than on a filled card.                     */
+
+:root {
+  /* Neutral grey, and a real step down from the cards.
+     The warm near-white this replaced sat at L 0.994 against the cards' 1.0 —
+     six thousandths of separation, which read as a colour cast rather than as
+     a background, and left the white composer invisible on it. 0.963 is far
+     enough that every white surface lifts, and neutral so nothing goes yellow.
+     `band` is a further step down again, for the surfaces that recede. */
+  --ground: oklch(0.963 0.002 255);
+  --band: oklch(0.935 0.003 255);
+  --rule: oklch(0.897 0.004 255);
+
+  --penny: oklch(0.34 0.062 250);
+  --symptom: oklch(0.52 0.135 38);
+  --appointment: oklch(0.6 0.105 74);
+  --wellbeing: oklch(0.49 0.082 155);
+  --admin: oklch(0.52 0.014 250);
+  --person-owen: oklch(0.47 0.088 305);
+
+  --penny-wash: oklch(0.962 0.014 250);
+  --symptom-wash: oklch(0.965 0.02 38);
+  --appointment-wash: oklch(0.968 0.024 78);
+  --wellbeing-wash: oklch(0.965 0.016 155);
+  --admin-wash: oklch(0.966 0.004 250);
+  --owen-wash: oklch(0.963 0.018 305);
+}
+
+.dark {
+  --ground: oklch(0.16 0.006 250);
+  --band: oklch(0.22 0.008 250);
+  --rule: oklch(1 0 0 / 12%);
+
+  --penny: oklch(0.78 0.07 250);
+  --symptom: oklch(0.74 0.112 44);
+  --appointment: oklch(0.8 0.098 82);
+  --wellbeing: oklch(0.75 0.075 155);
+  --admin: oklch(0.72 0.018 250);
+  --person-owen: oklch(0.75 0.078 302);
+
+  --penny-wash: oklch(0.27 0.028 250);
+  --symptom-wash: oklch(0.27 0.036 44);
+  --appointment-wash: oklch(0.27 0.032 82);
+  --wellbeing-wash: oklch(0.26 0.028 155);
+  --admin-wash: oklch(0.25 0.008 250);
+  --owen-wash: oklch(0.26 0.03 302);
+}
+
+@theme inline {
+  --color-ground: var(--ground);
+  --color-band: var(--band);
+  --color-rule: var(--rule);
+  --color-penny: var(--penny);
+  --color-symptom: var(--symptom);
+  --color-appointment: var(--appointment);
+  --color-wellbeing: var(--wellbeing);
+  --color-admin: var(--admin);
+  --color-owen: var(--person-owen);
+  --color-penny-wash: var(--penny-wash);
+  --color-symptom-wash: var(--symptom-wash);
+  --color-appointment-wash: var(--appointment-wash);
+  --color-wellbeing-wash: var(--wellbeing-wash);
+  --color-admin-wash: var(--admin-wash);
+  --color-owen-wash: var(--owen-wash);
+}
+
+@layer base {
+  /*
+   * Tailwind's preflight, reproduced for the ported subtree only — see the file header for why it
+   * cannot be global. Every rule here exists because a utility in the copied components assumes
+   * it: `size-*` assumes border-box, `border` assumes a solid default border-style, `text-[17px]`
+   * on an `<h3>` assumes headings do not carry a user-agent font-size, and every `<button>` in
+   * the timeline assumes it starts with no chrome of its own.
+   */
+  .record,
+  .record *,
+  .record *::before,
+  .record *::after {
+    box-sizing: border-box;
+    /* Width zero, style solid, colour `--border`: that last part is what makes a bare `border`
+       utility draw the design system's hairline rather than the text colour. */
+    border: 0 solid var(--border);
+    margin: 0;
+    padding: 0;
+  }
+
+  .record :is(h1, h2, h3, h4, h5, h6) {
+    font-size: inherit;
+    font-weight: inherit;
+  }
+
+  .record :is(ul, ol, menu) {
+    list-style: none;
+  }
+
+  .record :is(button, input, textarea, select) {
+    font: inherit;
+    letter-spacing: inherit;
+    color: inherit;
+    background: transparent;
+    border-radius: 0;
+  }
+
+  /* Tailwind v4 leaves buttons on the user agent's arrow. In a record that is mostly text, the
+     few things you can actually press should say so. */
+  .record button:not(:disabled) {
+    cursor: pointer;
+  }
+
+  .record :is(img, svg, video) {
+    display: block;
+    max-width: 100%;
+  }
+
+  .record :is(input, textarea)::placeholder {
+    color: color-mix(in oklab, currentcolor 50%, transparent);
+    opacity: 1;
+  }
+
+  .record {
+    @apply outline-ring/50 font-sans antialiased;
+  }
+
+  /*
+   * The record tints the whole page, not just its own box.
+   *
+   * The design is white cards lifting off a tinted ground; a ground that stops where the content
+   * stops reads as a grey panel dropped on a white page, which is the opposite effect. `:has()`
+   * keeps it to the one route that asked for it, without a body class and the `useEffect` that
+   * would have to add and remove it on every navigation.
+   */
+  body:has(.record) {
+    background: var(--ground);
+  }
+}

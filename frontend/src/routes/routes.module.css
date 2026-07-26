@@ -1,12 +1,21 @@
 /*
- * Route-level layout only, shared by every screen. Feed cards, day dividers and source
- * disclosure get their own component modules — these rules are the frame around them.
+ * Route-level layout only, shared by every screen. The editor and the loading states get their
+ * own component modules, and the care record gets Tailwind — these rules are the frame around
+ * all three.
  */
 
 .shell {
   min-height: 100svh;
   display: flex;
   flex-direction: column;
+  /*
+   * `clip`, not `hidden`. The record below breaks out of the reading column with a `100vw` width,
+   * which on a platform with classic (space-taking) scrollbars is a dozen pixels wider than the
+   * viewport and would otherwise leave the whole app scrollable sideways. `overflow: hidden`
+   * would fix that and break the context column: it creates a scroll container, and a sticky
+   * element sticks to its nearest scrollport. `clip` clips without becoming one.
+   */
+  overflow-x: clip;
 }
 
 .header {
@@ -72,6 +81,27 @@
   padding: 24px 20px 64px;
   box-sizing: border-box;
   flex: 1;
+}
+
+/*
+ * The one screen that escapes the reading column.
+ *
+ * Every other route is a form or a document at 880px, which is the right measure for reading
+ * sentences. The care record is not that shape: it is a dated timeline with a column of standing
+ * facts beside it, drawn to 1400px, and squeezed into 880 the context column would either
+ * disappear or strangle the entries.
+ *
+ * The negative margins are exact inverses of `.main`'s padding, so the record's tinted ground
+ * runs from the header to the bottom of the window instead of floating in a white margin — the
+ * whole design depends on white cards lifting off a tinted page, and a tinted page with a white
+ * border around it is neither.
+ */
+.bleed {
+  width: 100vw;
+  max-width: 100vw;
+  margin-inline: calc(50% - 50vw);
+  margin-top: -24px;
+  margin-bottom: -64px;
 }
 
 .pageHeader {
