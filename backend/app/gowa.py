@@ -338,7 +338,7 @@ async def send_message(chat_id: str, text: str) -> GowaSendResult:
     return GowaSendResult(ok=True, message_id=_as_str(results.get("message_id")))
 
 
-async def download_media(provider_message_id: str) -> tuple[bytes, str] | None:
+async def download_media(provider_message_id: str, chat_id: str | None) -> tuple[bytes, str] | None:
     """`GET /message/{id}/download` — `(bytes, content_type)`, or None if there is no media.
 
     THIS IS THE ONLY WAY TO THE BYTES. WhatsApp media is end-to-end encrypted: the
@@ -346,6 +346,24 @@ async def download_media(provider_message_id: str) -> tuple[bytes, str] | None:
     `mediaKey` that would decrypt it lives in GOWA's session store, not ours. Fetching that URL
     directly returns ciphertext. So the sidecar being down means no audio — not a slower path
     to it.
+
+    `chat_id` IS REQUIRED BY GOWA AND WAS NOT BEING SENT. It goes as the `phone` query
+    parameter, which is what GOWA calls the JID of the chat the message belongs to — a group id
+    like `…@g.us` is as valid there as a phone number. Without it every single request came back
+
+        400  {"code":"VALIDATION_ERROR","message":"phone: cannot be blank."}
+
+    and this function dutifully returned None, which every caller treats as "there is no media
+    here" — an ordinary, expected answer. So voice notes were never transcribed and photographs
+    were never described or stored, silently, on every message, and the only trace was one INFO
+    line saying the sidecar was unavailable. Nothing raised, no health check moved, and the
+    volume stayed empty and correct. A required parameter that is only checked by the remote
+    end is the failure mode this signature now makes impossible to reintroduce: it is positional
+    and it has no default.
+
+    `None` is accepted for it and refused immediately, because an old row ingested before the
+    payload carried a chat id genuinely cannot be fetched — and sending a blank `phone` would
+    just reproduce the 400 with a log line that blames the sidecar.
 
     Fetched ON DEMAND and never persisted. `WHATSAPP_AUTO_DOWNLOAD_MEDIA` stays false because
     it grows `/app/statics/media` without bound; the caller transcribes, keeps the text and
@@ -355,8 +373,13 @@ async def download_media(provider_message_id: str) -> tuple[bytes, str] | None:
     response that lies about (or omits) its length still cannot be read into memory without
     limit. Like everything else in this module it NEVER raises: None is a normal answer.
     """
+    if not chat_id:
+        log.warning("gowa.media_no_chat_id")
+        return None
+
     path = f"/message/{quote(provider_message_id, safe='')}/download"
-    media, error = await _download(path)
+    params: dict[str, Any] = {"phone": chat_id}
+    media, error = await _download(path, params=params)
 
     if error == DEVICE_ID_REQUIRED:
         # Same self-healing shape as `send_message`: never guess whether v9 wants a device id
@@ -367,7 +390,11 @@ async def download_media(provider_message_id: str) -> tuple[bytes, str] | None:
             return None
         log.info("gowa.media_retry_with_device")
         media, error = await _download(
-            path, params={"device_id": device_id}, headers={DEVICE_ID_HEADER: device_id}
+            path,
+            # `phone` rides along on the retry too. Dropping it here would turn a device-id
+            # problem into the validation error above, one layer further from the cause.
+            params={**params, "device_id": device_id},
+            headers={DEVICE_ID_HEADER: device_id},
         )
 
     if media is None:

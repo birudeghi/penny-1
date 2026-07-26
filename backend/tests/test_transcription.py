@@ -26,6 +26,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from urllib.parse import parse_qs
 
 import pytest
 import sqlalchemy as sa
@@ -49,6 +50,9 @@ pytestmark = pytest.mark.db
 
 NOW = datetime(2026, 7, 25, 9, 30, tzinfo=UTC)
 PROVIDER_MESSAGE_ID = "3EB0C767D26B8FB1C2A9"
+# GOWA calls this `phone` on the download route and requires it. A group JID is as valid there
+# as a phone number, and a group is the only thing Penny is ever in.
+CHAT_ID = "12036@g.us"
 SPOKEN = "Mum had a fall this morning but she's okay, the GP is calling back at four."
 
 
@@ -124,7 +128,11 @@ class FakeGowa:
 
             def do_GET(self) -> None:  # BaseHTTPRequestHandler's spelling, not ours
                 path, _, query = self.path.partition("?")
-                params = dict(pair.split("=", 1) for pair in query.split("&") if "=" in pair)
+                # `parse_qs` and not a hand-rolled split, because it PERCENT-DECODES. A chat JID
+                # is `12036@g.us` and httpx sends the `@` as `%40`; a parser that does not decode
+                # reports a value the real server never sees and makes an assertion about it a
+                # test of our own encoder rather than of the request.
+                params = {key: values[0] for key, values in parse_qs(query).items()}
                 fake.requests.append((path, params))
 
                 if path == "/devices":
@@ -132,6 +140,16 @@ class FakeGowa:
                     return
                 if not path.endswith("/download"):
                     self._json(404, {"code": "NOT_FOUND"})
+                    return
+                # GOWA REQUIRES `phone` HERE AND THIS DOUBLE DID NOT. That gap is what let a
+                # production outage sit under a green suite: every real download came back
+                # `400 VALIDATION_ERROR "phone: cannot be blank."`, `download_media` returned
+                # None, and None is the ordinary "no media here" answer every caller expects.
+                # Voice notes went untranscribed and photographs unstored on every message,
+                # with nothing raised. A double more permissive than the real thing does not
+                # test an integration, it conceals it.
+                if not params.get("phone"):
+                    self._json(400, {"code": "VALIDATION_ERROR", "message": "phone: cannot be blank."})
                     return
                 if fake.require_device_id and "device_id" not in params:
                     self._json(400, {"code": "DEVICE_ID_REQUIRED"})
@@ -545,7 +563,7 @@ async def test_download_media_returns_the_bytes_and_the_content_type(
 ) -> None:
     fake_gowa.content_type = "audio/ogg; codecs=opus"
 
-    media = await gowa.download_media(PROVIDER_MESSAGE_ID)
+    media = await gowa.download_media(PROVIDER_MESSAGE_ID, CHAT_ID)
 
     assert media is not None
     audio, content_type = media
@@ -554,13 +572,58 @@ async def test_download_media_returns_the_bytes_and_the_content_type(
     assert fake_gowa.requests[0][0] == f"/message/{PROVIDER_MESSAGE_ID}/download"
 
 
+async def test_download_media_sends_the_chat_id_as_phone(
+    fake_gowa: FakeGowa, configured: Callable[..., Settings]
+) -> None:
+    """THE REGRESSION GUARD FOR A SILENT PRODUCTION OUTAGE.
+
+    GOWA requires `phone` on this route — the JID of the chat the message belongs to — and
+    answers `400 VALIDATION_ERROR "phone: cannot be blank."` without it. We were not sending it,
+    so every download failed and returned None, which is indistinguishable from "this message
+    has no media". Voice notes were never transcribed and photographs were never described or
+    stored, on every single message, and the only trace was one INFO line blaming the sidecar.
+    """
+    media = await gowa.download_media(PROVIDER_MESSAGE_ID, CHAT_ID)
+
+    assert media is not None, "a download without `phone` is a 400 and yields no bytes"
+    _, params = fake_gowa.requests[0]
+    assert params["phone"] == CHAT_ID
+
+
+async def test_download_media_refuses_rather_than_sending_a_blank_phone(
+    fake_gowa: FakeGowa, configured: Callable[..., Settings]
+) -> None:
+    """An old row with no chat id in its payload cannot be fetched, and must say so HERE.
+
+    Sending the request anyway reproduces the 400 and logs it as the sidecar being unavailable,
+    which points every future reader at GOWA instead of at the missing value.
+    """
+    assert await gowa.download_media(PROVIDER_MESSAGE_ID, None) is None
+    assert fake_gowa.requests == [], "nothing should reach GOWA without a chat id"
+
+
+async def test_download_media_keeps_phone_on_the_device_id_retry(
+    fake_gowa: FakeGowa, configured: Callable[..., Settings]
+) -> None:
+    """Dropping `phone` on the retry turns a device-id problem into a validation error, one
+    layer further from the cause and with a misleading log line."""
+    fake_gowa.require_device_id = True
+
+    media = await gowa.download_media(PROVIDER_MESSAGE_ID, CHAT_ID)
+
+    assert media is not None
+    downloads = [params for path, params in fake_gowa.requests if path.endswith("/download")]
+    assert all(params.get("phone") == CHAT_ID for params in downloads)
+    assert downloads[-1]["device_id"] == "dev-1"
+
+
 async def test_download_media_self_heals_a_device_id_requirement(
     fake_gowa: FakeGowa, configured: Callable[..., Settings]
 ) -> None:
     """v9 demands a device id on routes the docs do not mention it on. Never guessed: asked."""
     fake_gowa.require_device_id = True
 
-    media = await gowa.download_media(PROVIDER_MESSAGE_ID)
+    media = await gowa.download_media(PROVIDER_MESSAGE_ID, CHAT_ID)
 
     assert media is not None
     assert media[0] == AUDIO
@@ -579,7 +642,7 @@ async def test_download_media_refuses_a_body_that_declares_itself_too_big(
     configured(transcription_max_bytes=1024)
     fake_gowa.media = b"\x00" * 4096
 
-    assert await gowa.download_media(PROVIDER_MESSAGE_ID) is None
+    assert await gowa.download_media(PROVIDER_MESSAGE_ID, CHAT_ID) is None
 
 
 async def test_download_media_caps_a_body_that_declares_no_length_at_all(
@@ -590,21 +653,21 @@ async def test_download_media_caps_a_body_that_declares_no_length_at_all(
     fake_gowa.media = b"\x00" * 65536
     fake_gowa.chunked = True
 
-    assert await gowa.download_media(PROVIDER_MESSAGE_ID) is None
+    assert await gowa.download_media(PROVIDER_MESSAGE_ID, CHAT_ID) is None
 
 
 async def test_download_media_never_raises_when_the_sidecar_is_gone(
     fake_gowa: FakeGowa, configured: Callable[..., Settings]
 ) -> None:
     fake_gowa.stop()
-    assert await gowa.download_media(PROVIDER_MESSAGE_ID) is None
+    assert await gowa.download_media(PROVIDER_MESSAGE_ID, CHAT_ID) is None
 
 
 async def test_download_media_is_none_when_gowa_is_not_configured(
     settings_override: Callable[..., Any],
 ) -> None:
     settings_override(gowa_url=None)
-    assert await gowa.download_media(PROVIDER_MESSAGE_ID) is None
+    assert await gowa.download_media(PROVIDER_MESSAGE_ID, CHAT_ID) is None
 
 
 async def test_a_json_body_is_not_audio(
@@ -614,7 +677,7 @@ async def test_a_json_body_is_not_audio(
     fake_gowa.media = b'{"code":"SUCCESS","results":{"path":"/statics/media/x.ogg"}}'
     fake_gowa.content_type = "application/json"
 
-    assert await gowa.download_media(PROVIDER_MESSAGE_ID) is None
+    assert await gowa.download_media(PROVIDER_MESSAGE_ID, CHAT_ID) is None
 
 
 async def test_nothing_that_was_said_reaches_a_log_line(

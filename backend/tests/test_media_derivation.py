@@ -31,6 +31,7 @@ from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 import sqlalchemy as sa
@@ -58,6 +59,10 @@ PHOTO = b"\xff\xd8\xff\xe0" + bytes(range(256)) * 16
 # what is visible, no diagnosis.
 DESCRIPTION = "A red patch about 4cm across on the outside of the left lower leg."
 
+# GOWA calls this `phone` on the download route and requires it. A group JID is as valid there
+# as a phone number, and a group is the only chat Penny is ever in.
+CHAT_ID = "12036@g.us"
+
 
 # --- the fake sidecar ------------------------------------------------------------------------
 
@@ -69,6 +74,16 @@ class _FakeGowa:
     not our logic but the HTTP shape — the URL, the auth header, whether a `content-type` with
     parameters survives, whether a streamed body is read to the end. A mock that answers
     whatever it is asked cannot fail any of those.
+
+    IT REFUSES A REQUEST WITH NO `phone`, exactly as GOWA does, and that clause is here because
+    its absence cost a production outage. GOWA requires `phone` — the JID of the chat a message
+    belongs to — on the download route, and answers `400 VALIDATION_ERROR "phone: cannot be
+    blank."` without it. We were not sending it. Every download failed, `download_media` returned
+    None, and None is the ordinary answer meaning "no media here" — so voice notes were never
+    transcribed and photographs were never stored, on every message, with nothing raised and
+    nothing red. This double answered anything it was asked, so the whole suite stayed green
+    across the entire failure. A fake that is more permissive than the thing it stands in for
+    does not test the integration, it hides it.
     """
 
     def __init__(self) -> None:
@@ -81,6 +96,18 @@ class _FakeGowa:
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:  # stdlib's spelling, not ours
                 server.requests.append(self.path)
+                if "/download" in self.path and not parse_qs(urlparse(self.path).query).get(
+                    "phone", [""]
+                )[0]:
+                    payload = json.dumps(
+                        {"code": "VALIDATION_ERROR", "message": "phone: cannot be blank."}
+                    ).encode()
+                    self.send_response(400)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                    return
                 if server.status != 200:
                     payload = json.dumps({"code": "NOT_FOUND", "message": "gone"}).encode()
                     self.send_response(server.status)
@@ -109,7 +136,17 @@ class _FakeGowa:
 
     @property
     def downloads(self) -> list[str]:
-        return [path for path in self.requests if path.endswith("/download")]
+        """Download paths WITHOUT their query, so callers can assert on the route alone."""
+        return [urlparse(p).path for p in self.requests if urlparse(p).path.endswith("/download")]
+
+    @property
+    def download_queries(self) -> list[dict[str, list[str]]]:
+        """The parsed query of each download, for asserting on `phone`."""
+        return [
+            parse_qs(urlparse(p).query)
+            for p in self.requests
+            if urlparse(p).path.endswith("/download")
+        ]
 
     def close(self) -> None:
         self._httpd.shutdown()
@@ -250,7 +287,11 @@ def _add_message(
                 sent_at=datetime.now(UTC),
                 message_type=message_type,
                 text=text,
-                payload=payload or {},
+                # `chat_id` DEFAULTS IN rather than being left to each caller. It is guaranteed
+                # on every real webhook payload and it is what GOWA requires as `phone` on the
+                # download route, so a fixture without it is a message shape the product never
+                # produces — and one that would make these tests pass for the wrong reason.
+                payload={"chat_id": CHAT_ID, **(payload or {})},
             )
         )
         await session.commit()

@@ -686,7 +686,10 @@ async def _derive(
     # (b) The bytes. GOWA holds the mediaKey, so this is the only path to them — the URL in the
     # payload is an encrypted blob. `download_media` is bounded by `transcription_max_bytes`
     # and, like everything in that module, returns None rather than raising.
-    media = await gowa.download_media(row.provider_message_id)
+    # `chat_id` is GOWA's `phone` parameter and it is not optional there — see `download_media`.
+    # It comes off the stored payload rather than from `whatsapp_links` because it is the chat
+    # this MESSAGE arrived on, which is the thing GOWA is being asked about.
+    media = await gowa.download_media(row.provider_message_id, payload.get("chat_id"))
     if media is None:
         log.info("media.no_media", extra={"message_id": str(message_id), "why": "gowa_unavailable"})
         return None

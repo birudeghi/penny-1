@@ -285,7 +285,8 @@ async def _transcribe(
         return None
 
     # (c) The bytes. GOWA holds the mediaKey, so this is the only path to them.
-    media = await gowa.download_media(row.provider_message_id)
+    # `chat_id` is GOWA's `phone` parameter and it is not optional there — see `download_media`.
+    media = await gowa.download_media(row.provider_message_id, payload.get("chat_id"))
     if media is None:
         log.info(
             "transcribe.no_media", extra={"message_id": str(message_id), "why": "gowa_unavailable"}

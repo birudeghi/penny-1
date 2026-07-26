@@ -33,6 +33,7 @@ from collections.abc import Awaitable, Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -89,6 +90,21 @@ class _FakeGowa:
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:  # stdlib's spelling, not ours
                 server.requests.append(self.path)
+                # GOWA requires `phone` on the download route and this double did not, which is
+                # how an outage that broke every voice note and every photograph lived under a
+                # green suite. See `test_transcription.FakeGowa` for the whole story.
+                if "/download" in self.path and not parse_qs(urlparse(self.path).query).get(
+                    "phone", [""]
+                )[0]:
+                    payload = json.dumps(
+                        {"code": "VALIDATION_ERROR", "message": "phone: cannot be blank."}
+                    ).encode()
+                    self.send_response(400)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                    return
                 if server.status != 200:
                     payload = json.dumps({"code": "NOT_FOUND", "message": "gone"}).encode()
                     self.send_response(server.status)
@@ -117,7 +133,17 @@ class _FakeGowa:
 
     @property
     def downloads(self) -> list[str]:
-        return [path for path in self.requests if path.endswith("/download")]
+        """Download paths WITHOUT their query, so callers assert on the route alone."""
+        return [urlparse(p).path for p in self.requests if urlparse(p).path.endswith("/download")]
+
+    @property
+    def download_phones(self) -> list[str]:
+        """The `phone` GOWA was asked about on each download. Empty string when absent."""
+        return [
+            parse_qs(urlparse(p).query).get("phone", [""])[0]
+            for p in self.requests
+            if urlparse(p).path.endswith("/download")
+        ]
 
     def close(self) -> None:
         self._httpd.shutdown()
