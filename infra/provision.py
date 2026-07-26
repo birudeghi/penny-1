@@ -859,8 +859,21 @@ def report_generated_secrets(console: Console, minted: dict[str, str]) -> None:
     print("=" * 78 + "\n")
 
 
-def report_manual_steps(console: Console, *, domain: str, dns: dict[str, Any] | None) -> None:
-    console.head("Still to do BY HAND — the deployment is not finished without these")
+def report_manual_steps(
+    console: Console, *, domain: str, dns: dict[str, Any] | None, dry_run: bool = False
+) -> None:
+    """The list a script cannot do for you — and, on a dry run, the fact that it did nothing.
+
+    A DRY RUN USED TO END EXACTLY LIKE A REAL ONE: this checklist, headed "the deployment is not
+    finished without these", followed by "Done." Every mutation above it was a printed intention,
+    but the closing block never said so — and it is the part anyone actually reads. It cost a real
+    deployment: the operator went away to point DNS at a project that had never been created.
+    """
+    if dry_run:
+        console.head("DRY RUN — nothing above was created. Re-run without --dry-run.")
+        console.say("\n  The list below is what you WOULD then have to do by hand.")
+    else:
+        console.head("Still to do BY HAND — the deployment is not finished without these")
 
     console.say("\n  1. Point DNS at Railway.")
     records = (dns or {}).get("dnsRecords") or []
@@ -1209,8 +1222,11 @@ def main(argv: list[str]) -> int:
                 console.step(f"{TICK_SERVICE}: unchanged, not redeployed")
 
         report_generated_secrets(console, minted)
-        report_manual_steps(console, domain=args.domain, dns=dns)
-        console.say("\nDone. Runbook: docs/deployment.md")
+        report_manual_steps(console, domain=args.domain, dns=dns, dry_run=args.dry_run)
+        if args.dry_run:
+            console.say("\nDry run complete — Railway is unchanged.")
+        else:
+            console.say("\nDone. Runbook: docs/deployment.md")
         return 0
 
     except Failure as exc:
