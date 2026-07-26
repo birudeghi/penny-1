@@ -11,6 +11,7 @@
  * proportional from phone to desktop.
  */
 
+/* Base ground is the care feed's canvas grey (--color-surface in the overview design). */
 .page {
   position: relative;
   isolation: isolate;
@@ -18,8 +19,8 @@
   display: flex;
   flex-direction: column;
   color-scheme: light;
-  color: #6f614c;
-  background: #faf5ec;
+  color: #6b6375;
+  background: #f3f5f7;
 }
 
 /*
@@ -34,10 +35,10 @@
   z-index: -1;
   pointer-events: none;
   background:
-    radial-gradient(42% 36% at 88% 2%, rgba(242, 179, 66, 0.6), transparent 68%),
-    radial-gradient(34% 30% at 58% -10%, rgba(226, 87, 43, 0.16), transparent 70%),
-    radial-gradient(52% 46% at 0% 102%, rgba(122, 71, 28, 0.4), transparent 72%),
-    radial-gradient(28% 24% at 18% 22%, rgba(187, 113, 39, 0.18), transparent 74%);
+    radial-gradient(42% 36% at 88% 2%, rgba(242, 179, 66, 0.22), transparent 68%),
+    radial-gradient(34% 30% at 58% -10%, rgba(226, 87, 43, 0.06), transparent 70%),
+    radial-gradient(52% 46% at 0% 102%, rgba(122, 71, 28, 0.1), transparent 72%),
+    radial-gradient(28% 24% at 18% 22%, rgba(187, 113, 39, 0.06), transparent 74%);
   animation: glow 28s ease-in-out infinite alternate;
 }
 
@@ -65,36 +66,36 @@
 
 /* --- Top bar ---------------------------------------------------------------- */
 
+/* No hairline: like Tomo, the bar floats over the page rather than capping it. */
 .topBar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 18px clamp(20px, 4vw, 40px);
-  border-bottom: 1px solid #e9dfcd;
+  padding: 20px clamp(20px, 4vw, 40px);
 }
 
 .wordmark {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 14px;
   font-family: 'Newsreader', Georgia, serif;
-  font-size: 22px;
+  font-size: 32px;
   font-weight: 600;
   letter-spacing: -0.4px;
-  color: #221a10;
+  color: #08060d;
 }
 
 .coin {
-  width: 28px;
-  height: 28px;
+  width: 56px;
+  height: 56px;
   display: block;
 }
 
 .signIn {
   font-size: 15px;
   font-weight: 600;
-  color: #5c4f3d;
+  color: #6b6375;
   text-decoration: underline;
   text-underline-offset: 4px;
   text-decoration-thickness: 1px;
@@ -102,7 +103,7 @@
 }
 
 .signIn:hover {
-  color: #221a10;
+  color: #08060d;
 }
 
 /* --- Hero -------------------------------------------------------------------- */
@@ -112,65 +113,77 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
   width: 100%;
   max-width: 1200px;
   margin-inline: auto;
-  padding: 48px clamp(20px, 5vw, 56px) 64px;
+  padding: 48px clamp(20px, 5vw, 56px) 24px;
   box-sizing: border-box;
   text-align: center;
 }
 
 /* --- The number scene --------------------------------------------------------- */
 
+/* margin-block auto centers the scene in the space the bottom-pinned copy leaves free. */
 .scene {
   display: flex;
   flex-direction: column;
   align-items: center;
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
   text-decoration: none;
   color: inherit;
-  margin-bottom: clamp(40px, 7vh, 64px);
+  margin-block: auto;
+  padding-bottom: clamp(24px, 5vh, 48px);
 }
 
+/*
+ * Styled to pass as an actual screenshot, not a design asset: WhatsApp's own system font at
+ * regular weight (real messages are never bold), its real bubble radius and shadow, and a tail
+ * curled from the top corner the way WhatsApp actually draws it — not the sharp iMessage-style
+ * triangle this used to have at the bottom.
+ */
 .bubble {
   position: relative;
   z-index: 1;
   margin-top: 22px;
-  rotate: -1deg;
-  padding: 12px 16px;
-  border-radius: 16px 16px 4px 16px;
-  border: 1px solid rgba(18, 53, 36, 0.12);
+  padding: 8px 11px 10px 12px;
+  border-radius: 10px;
+  border-top-right-radius: 0;
   background: #d9fdd3;
-  color: #123524;
-  font-size: clamp(16px, 1.4vw, 19px);
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  box-shadow: 2px 3px 0 rgba(64, 47, 22, 0.12);
+  color: #111b21;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica Neue, Arial, sans-serif;
+  font-size: clamp(19px, 1.8vw, 24px);
+  font-weight: 400;
+  letter-spacing: normal;
+  box-shadow: 0 1px 0.5px rgba(0, 0, 0, 0.13);
   animation: settle 0.4s cubic-bezier(0.22, 1, 0.36, 1) 0.2s backwards;
 }
 
-/* The WhatsApp tail, attached at the tight corner. */
 .bubble::after {
   content: '';
   position: absolute;
-  right: -9px;
-  bottom: -1px;
-  width: 12px;
-  height: 12px;
-  background: #d9fdd3;
-  clip-path: polygon(0 0, 0 100%, 100% 100%);
+  top: 0;
+  right: -10px;
+  width: 10px;
+  height: 16px;
+  background: radial-gradient(circle at top left, transparent 10px, #d9fdd3 10.5px);
 }
 
 .bubbleMeta {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  margin-left: 12px;
+  float: right;
+  margin: 6px 0 -2px 8px;
   vertical-align: baseline;
-  font-size: 0.56em;
-  font-weight: 500;
-  letter-spacing: 0;
-  color: #5b7a66;
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: normal;
+  color: rgba(0, 0, 0, 0.45);
 }
 
 @keyframes settle {
@@ -186,7 +199,7 @@
   justify-content: center;
   column-gap: 0.45em;
   row-gap: 0.4em;
-  font-size: clamp(32px, 3.6vw, 52px);
+  font-size: clamp(32px, 3.7vw, 54px);
   font-weight: 800;
 }
 
@@ -260,127 +273,115 @@
 /* --- Copy & CTA ----------------------------------------------------------------- */
 
 /*
- * Deliberately not a centered stack: headline reads left like a page of type, and the CTA docks
- * beside it rather than floating beneath its own caption — the two moved apart is what keeps this
- * from reading as a template hero block.
+ * The Tomo lockup, in Penny's palette: a huge lowercase two-line headline bottom-left, and the
+ * CTA — a marigold pill plus a round badge carrying the WhatsApp mark — docked beside its last
+ * line. One glance, one gesture.
  */
 .copy {
+  margin-top: auto;
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  justify-content: flex-start;
-  gap: clamp(28px, 5vw, 56px);
+  align-items: flex-end;
+  gap: clamp(20px, 3vw, 44px);
   width: 100%;
   text-align: left;
 }
 
-.copyMain {
-  flex: 1 1 440px;
-  max-width: 580px;
-}
-
-.copyAction {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  flex: 0 0 auto;
-}
-
 .headline {
-  margin: 0 0 14px;
-  font-family: 'Newsreader', Georgia, serif;
-  font-size: clamp(30px, 3.4vw, 47px);
-  font-weight: 500;
-  line-height: 1.08;
-  letter-spacing: -0.01em;
-  color: #221a10;
-}
-
-.flourish {
-  font-style: italic;
-  font-weight: 500;
-  color: #e2572b;
-}
-
-.sub {
   margin: 0;
-  max-width: 46ch;
-  font-size: clamp(16px, 1.3vw, 18px);
-  line-height: 1.55;
-  text-wrap: balance;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: clamp(28px, 3.4vw, 48px);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.035em;
+  text-transform: lowercase;
+  color: #08060d;
 }
 
-/*
- * The CTA is styled as the message it sends, not a generic pill: an outgoing WhatsApp bubble,
- * tail and all, sitting opposite the "add me to your group chat" preview bubble up in the scene —
- * clicking it is visually the same act as hitting send.
- */
+/* One pill, coin brown — the same #bb7127 as Penny's logo — white mark and type. */
 .cta {
-  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 11px;
-  padding: 16px 26px 16px 22px;
-  border-radius: 22px 22px 4px 22px;
-  background: #25d366;
+  gap: 0.55em;
+  height: 2.4em;
+  padding-inline: 1.3em;
+  margin-bottom: 0.35em;
+  border: none;
+  cursor: pointer;
+  border-radius: 999px;
+  background: #bb7127;
   color: #fff;
-  font-size: clamp(17px, 1.4vw, 19px);
-  font-weight: 700;
-  letter-spacing: -0.005em;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: clamp(19px, 1.9vw, 27px);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
   text-decoration: none;
-  box-shadow: 3px 4px 0 rgba(64, 47, 22, 0.18);
   transition:
     transform 0.15s ease,
-    box-shadow 0.15s ease,
     background 0.15s ease;
 }
 
-.cta::after {
-  content: '';
-  position: absolute;
-  right: -1px;
-  bottom: -1px;
-  width: 11px;
-  height: 11px;
-  background: #25d366;
-  clip-path: polygon(0 0, 100% 100%, 0 100%);
-}
-
 .cta:hover {
-  background: #1fb457;
-  transform: translate(-1px, -2px);
-  box-shadow: 4px 6px 0 rgba(64, 47, 22, 0.2);
-}
-
-.cta:hover::after {
-  background: #1fb457;
+  background: #a86016;
+  transform: translateY(-2px);
 }
 
 .cta:active {
-  transform: translate(0, 0);
-  box-shadow: 2px 2px 0 rgba(64, 47, 22, 0.18);
+  transform: translateY(0);
 }
 
 .ctaLogo {
-  width: 1.35em;
-  height: 1.35em;
+  width: 1.25em;
+  height: 1.25em;
   flex-shrink: 0;
-}
-
-.ctaHint {
-  margin: 10px 0 0 4px;
-  font-size: 13.5px;
-  color: #99896f;
 }
 
 /* --- Footer -------------------------------------------------------------------- */
 
+/* Rises from the click point like a message sent, then fades. */
+.cursorToast {
+  position: fixed;
+  z-index: 10;
+  translate: -50% -130%;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: #08060d;
+  color: #fff;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: toastRise 1.8s ease forwards;
+}
+
+@keyframes toastRise {
+  0% {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  8% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  70% {
+    opacity: 1;
+    transform: translateY(-10px);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-18px);
+  }
+}
+
+/* Part of the page, Tomo-style: a quiet line in the bottom corner, no bar above it. */
 .footer {
-  padding: 22px clamp(20px, 4vw, 40px);
-  text-align: center;
-  font-size: 12.5px;
-  letter-spacing: 0.02em;
-  color: #a4937a;
+  padding: 18px clamp(20px, 4vw, 40px) 20px;
+  text-align: right;
+  font-size: 13px;
+  letter-spacing: 0.01em;
+  color: color-mix(in srgb, #6b6375 80%, transparent);
 }
 
 /* --- Responsive & motion -------------------------------------------------------- */
@@ -391,14 +392,15 @@
   }
 
   .number {
-    font-size: clamp(28px, 7.4vw, 44px);
+    font-size: clamp(34px, 8.8vw, 58px);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .page::before,
   .tile,
-  .bubble {
+  .bubble,
+  .cursorToast {
     animation: none;
   }
 

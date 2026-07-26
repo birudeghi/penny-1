@@ -11,7 +11,7 @@ interface ImportMetaEnv {
 
   /**
    * Penny's WhatsApp number for the landing page's wa.me links, digits only in E.164 order
-   * (`17479429824`). Unset falls back to Penny's real number, hard-coded in landing.tsx.
+   * (`17473209317`). Unset falls back to Penny's real number, hard-coded in landing.tsx.
    */
   readonly VITE_PENNY_WHATSAPP_NUMBER?: string
 }

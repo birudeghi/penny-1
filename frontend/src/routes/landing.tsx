@@ -1,20 +1,21 @@
-import type { CSSProperties } from 'react'
-import { Link } from 'react-router'
+import { useRef, useState } from 'react'
+import type { CSSProperties, MouseEvent } from 'react'
 
 import styles from './landing.module.css'
 
 /**
  * The marketing front door: one number, one button, nothing to install. Signed-out visitors to
- * `/` land here; the whole page exists to get Penny added to the family's group chat in a single
- * tap, so the number, the speech bubble, and the CTA are all the same wa.me link with a
- * prefilled greeting — the visitor never has to type, dial, or save a contact.
+ * `/` land here; the whole page exists to get Penny's number into the family's hands, so the
+ * number scene and the CTA both copy it to the clipboard — adding her to a group chat happens
+ * in WhatsApp itself, and a copied number pastes straight into the contact picker.
  *
  * The number is build-time config because the paired GOWA account can differ per environment;
  * the fallback is Penny's real number.
  */
-const DIGITS = (import.meta.env.VITE_PENNY_WHATSAPP_NUMBER ?? '17479429824').replace(/\D/g, '')
+const DIGITS = (import.meta.env.VITE_PENNY_WHATSAPP_NUMBER ?? '17473209317').replace(/\D/g, '')
 
-const WA_LINK = `https://wa.me/${DIGITS}?text=${encodeURIComponent('Hi Penny!')}`
+/* E.164 — pastes cleanly into WhatsApp, contacts, and dialers alike. */
+const COPY_TEXT = `+${DIGITS}`
 
 function formatNumber(digits: string): string {
   if (digits.length === 11 && digits.startsWith('1')) {
@@ -55,6 +56,26 @@ const GROUPS: { char: string; digit: number | null }[][] = (() => {
 })()
 
 export function LandingRoute() {
+  const [copied, setCopied] = useState(false)
+  const [toast, setToast] = useState<{ x: number; y: number; key: number } | null>(null)
+  const copiedTimer = useRef<number>(undefined)
+
+  function copyNumber(click: MouseEvent<HTMLButtonElement>) {
+    // Keyboard activation reports (0, 0); anchor the toast to the button instead.
+    const rect = click.currentTarget.getBoundingClientRect()
+    const x = click.clientX || rect.left + rect.width / 2
+    const y = click.clientY || rect.top
+    void navigator.clipboard.writeText(COPY_TEXT).then(() => {
+      setCopied(true)
+      setToast({ x, y, key: Date.now() })
+      window.clearTimeout(copiedTimer.current)
+      copiedTimer.current = window.setTimeout(() => {
+        setCopied(false)
+        setToast(null)
+      }, 1800)
+    })
+  }
+
   return (
     <div className={styles.page}>
       <header className={styles.topBar}>
@@ -62,16 +83,17 @@ export function LandingRoute() {
           <img className={styles.coin} src="/favicon.svg" alt="" aria-hidden />
           Penny
         </span>
-        <Link to="/login" className={styles.signIn}>
+        <a href="https://app.pennyai.chat" className={styles.signIn}>
           Sign in
-        </Link>
+        </a>
       </header>
 
       <main className={styles.hero}>
-        <a
+        <button
+          type="button"
           className={styles.scene}
-          href={WA_LINK}
-          aria-label={`Message Penny on WhatsApp at ${DISPLAY} and add her to your group chat`}
+          onClick={copyNumber}
+          aria-label={`Copy Penny's WhatsApp number ${DISPLAY} to the clipboard`}
         >
           <span className={styles.number} aria-hidden>
             {GROUPS.map((group, g) => (
@@ -115,32 +137,40 @@ export function LandingRoute() {
               </svg>
             </span>
           </span>
-        </a>
+        </button>
 
         <div className={styles.copy}>
-          <div className={styles.copyMain}>
-            <h1 className={styles.headline}>
-              24-hour Care Assistant that lives in{' '}
-              <em className={styles.flourish}>your messages</em>
-            </h1>
-            <p className={styles.sub}>
-              Text as you normally would. Penny listens, reminds and summarizes for you.
-            </p>
-          </div>
-
-          <div className={styles.copyAction}>
-            <a className={styles.cta} href={WA_LINK}>
-              <svg className={styles.ctaLogo} viewBox="0 0 24 24" aria-hidden fill="currentColor">
+          <h1 className={styles.headline}>
+            care assistant
+            <br />
+            in your chats
+          </h1>
+          <button
+            type="button"
+            className={styles.cta}
+            onClick={copyNumber}
+            aria-label={`Copy Penny's WhatsApp number ${DISPLAY} to the clipboard`}
+          >
+            <svg className={styles.ctaLogo} viewBox="0 0 24 24" aria-hidden fill="currentColor">
                 <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 0 0 5.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 0 0-3.48-8.413Z" />
-              </svg>
-              Add me to your family chat
-            </a>
-            <p className={styles.ctaHint}>Opens in WhatsApp.</p>
-          </div>
+            </svg>
+            {copied ? 'number copied!' : 'let Penny in'}
+          </button>
         </div>
       </main>
 
-      <footer className={styles.footer}>One number for the whole family.</footer>
+      <footer className={styles.footer}>designed with love in London</footer>
+
+      {toast ? (
+        <span
+          key={toast.key}
+          className={styles.cursorToast}
+          style={{ left: toast.x, top: toast.y }}
+          aria-hidden
+        >
+          copied to clipboard
+        </span>
+      ) : null}
     </div>
   )
 }
