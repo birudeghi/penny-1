@@ -170,13 +170,17 @@ export interface Vital {
 }
 
 /**
- * The four a clinician reads first. Every key is always present; null means nobody has said.
+ * The part of the care profile this record's page reads — mirrors `CareProfileOut`.
  *
- * That distinction is the whole point of the type. "We do not know her allergies" and "she has
- * no allergies" are different facts and only one of them is safe to act on, so the band renders
- * every row whether or not it is filled and an optional key would let the two blur together.
+ * THE FOUR VITALS ARE ALWAYS PRESENT AS KEYS; null means nobody has said. That distinction is
+ * the whole point of the type: "we do not know her allergies" and "she has no allergies" are
+ * different facts, only one is safe to act on, and an optional key would let the two blur.
  */
-export interface Vitals {
+export interface CareProfileFacts {
+  age: number | null
+  place: string | null
+  conditions: string[]
+  medications: string[]
   nhs_number: Vital | null
   allergies: Vital | null
   respect_form: Vital | null
@@ -188,7 +192,7 @@ export interface Household {
   name: string
   care_recipient_name: string
   timezone: string
-  vitals: Vitals
+  care_profile: CareProfileFacts
 }
 
 /** `GET /api/me` — the session probe the app boots on. 401 here is normal, not an error. */

@@ -411,17 +411,26 @@ class VitalOut(BaseModel):
     confirmed_at: str | None = None
 
 
-class HouseholdVitals(BaseModel):
-    """THE FOUR READ IN A HURRY, and all four keys are always present.
+class CareProfileOut(BaseModel):
+    """The part of `CareProfile` the record's own page reads.
 
-    Absent means null, never missing. The band on the record renders every row whether or not it
-    is filled, because "nobody has told us her allergies" is one of the most important sentences
-    that page can say and it is only visible if the label is — so a key that vanished when empty
-    would let the client mistake a gap for a fact. This is the exact opposite of what the care
-    brief does with the same four fields, and `care_profile._vitals_line` says why the two
-    readers want opposite things from the same silence.
+    Not the whole model. `name`, `aliases` and `providers` are the extraction filter's business
+    and nothing on screen uses them, so they are not published — a field on the wire is a field
+    somebody will render, and the brief's readers and this page's readers want opposite things
+    from the same silence.
+
+    THE FOUR VITALS ARE ALWAYS PRESENT AS KEYS. Absent means null, never missing. "We do not know
+    her allergies" and "she has no allergies" are different facts, only one is safe to act on,
+    and a key that vanished when empty would let a client collapse the two. `care_profile.py`'s
+    `_render_vitals` does the exact opposite for the model, and says why.
     """
 
+    age: int | None = None
+    place: str | None = None
+    # Rendered as "Living with" and "Medications" beside the timeline. Lists, in the family's
+    # own words, never expanded or tidied — the same values the brief carries.
+    conditions: list[str] = Field(default_factory=list)
+    medications: list[str] = Field(default_factory=list)
     nhs_number: VitalOut | None = None
     allergies: VitalOut | None = None
     respect_form: VitalOut | None = None
@@ -433,7 +442,7 @@ class HouseholdOut(BaseModel):
     name: str
     care_recipient_name: str
     timezone: str
-    vitals: HouseholdVitals
+    care_profile: CareProfileOut
 
 
 def to_household(row: Any) -> HouseholdOut:
@@ -451,12 +460,16 @@ def to_household(row: Any) -> HouseholdOut:
         name=row.name,
         care_recipient_name=row.care_recipient_name,
         timezone=row.timezone,
-        vitals=HouseholdVitals(
+        care_profile=CareProfileOut(
+            age=profile.age,
+            place=profile.place,
+            conditions=list(profile.conditions),
+            medications=list(profile.medications),
             **{
                 field: VitalOut(value=vital.value, confirmed_at=vital.confirmed_at)
                 for field in ("nhs_number", "allergies", "respect_form", "baseline")
                 if (vital := getattr(profile, field)) and vital.value
-            }
+            },
         ),
     )
 

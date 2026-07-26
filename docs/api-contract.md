@@ -221,7 +221,11 @@ The session probe the app boots on.
     "name": "The Shaws",
     "care_recipient_name": "Margaret",
     "timezone": "Europe/London",
-    "vitals": {
+    "care_profile": {
+      "age": 84,
+      "place": "Croydon",
+      "conditions": ["Heart failure", "Hypertension"],
+      "medications": ["Ramipril 2.5 mg"],
       "nhs_number": null,
       "allergies": { "value": "Penicillin", "confirmed_at": "2026-03-14" },
       "respect_form": { "value": "In the folder by the front door", "confirmed_at": null },
@@ -234,12 +238,14 @@ The session probe the app boots on.
 
 **401** when signed out — this is normal on first load, not an error to report.
 
-#### `vitals`
+#### `care_profile`
 
-The four a clinician reads first, filled by the onboarding interview and returned on this
-endpoint and on `PATCH /api/household`.
+What the record's own page reads: `age`, `place`, `conditions`, `medications`, and the four
+vitals a clinician reads first. Filled by the onboarding interview, returned on this endpoint
+and on `PATCH /api/household`. `name`, `aliases` and `providers` are deliberately NOT published —
+they are the extraction filter's business and nothing on screen uses them.
 
-**All four keys are always present.** `null` means nobody has told us; it never means the key
+**All four VITAL keys are always present.** `null` means nobody has told us; it never means the key
 was omitted. That distinction is the reason the object exists in this shape: "we do not know her
 allergies" and "she has no allergies" are different facts, only one is safe to act on, and a key
 that vanished when empty would let a client collapse the two. Clients must render every row,

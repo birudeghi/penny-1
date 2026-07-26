@@ -4,10 +4,28 @@
     "name": "The Doyles",
     "care_recipient_name": "Margaret",
     "timezone": "Europe/London",
-    "vitals": {
+    "care_profile": {
+      "age": 84,
+      "place": "Croydon",
+      "conditions": [
+        "Heart failure",
+        "Hypertension",
+        "Osteoarthritis, knees"
+      ],
+      "medications": [
+        "Ramipril 2.5 mg",
+        "Furosemide 40 mg",
+        "Atorvastatin 20 mg"
+      ],
       "nhs_number": null,
-      "allergies": { "value": "Penicillin", "confirmed_at": "2026-03-14" },
-      "respect_form": { "value": "In the folder by the front door", "confirmed_at": null },
+      "allergies": {
+        "value": "Penicillin",
+        "confirmed_at": "2026-03-14"
+      },
+      "respect_form": {
+        "value": "In the folder by the front door",
+        "confirmed_at": null
+      },
       "baseline": {
         "value": "Mobile with a frame indoors, breathless on one flight of stairs",
         "confirmed_at": "2026-05-02"

@@ -311,12 +311,12 @@ def test_the_four_vitals_reach_the_api_with_their_dates() -> None:
         )
     )
 
-    assert out.vitals.allergies is not None
-    assert out.vitals.allergies.value == "Penicillin"
-    assert out.vitals.allergies.confirmed_at == "2026-03-14"
+    assert out.care_profile.allergies is not None
+    assert out.care_profile.allergies.value == "Penicillin"
+    assert out.care_profile.allergies.confirmed_at == "2026-03-14"
     # Given without a date, and it stays without one rather than borrowing today's.
-    assert out.vitals.baseline is not None
-    assert out.vitals.baseline.confirmed_at is None
+    assert out.care_profile.baseline is not None
+    assert out.care_profile.baseline.confirmed_at is None
 
 
 def test_an_unanswered_vital_is_null_and_its_key_is_still_there() -> None:
@@ -327,10 +327,11 @@ def test_an_unanswered_vital_is_null_and_its_key_is_still_there() -> None:
     """
     from app.schemas import to_household
 
-    serialised = to_household(_row()).model_dump()["vitals"]
+    serialised = to_household(_row()).model_dump()["care_profile"]
 
-    assert set(serialised) == {"nhs_number", "allergies", "respect_form", "baseline"}
-    assert all(value is None for value in serialised.values())
+    assert {"nhs_number", "allergies", "respect_form", "baseline"} <= set(serialised)
+    vitals = ("nhs_number", "allergies", "respect_form", "baseline")
+    assert all(serialised[name] is None for name in vitals)
 
 
 def test_a_malformed_profile_costs_the_vitals_and_not_the_session() -> None:
@@ -344,4 +345,4 @@ def test_a_malformed_profile_costs_the_vitals_and_not_the_session() -> None:
         timezone = "Europe/London"
         care_profile = ["not", "a", "dict"]
 
-    assert to_household(_Bad()).vitals.allergies is None
+    assert to_household(_Bad()).care_profile.allergies is None

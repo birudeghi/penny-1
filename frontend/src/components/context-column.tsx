@@ -6,7 +6,7 @@ import { dayKey, formatOccurredAt } from '@/lib/datetime'
 import { usePeople } from '@/lib/people'
 import { timelineKind } from '@/lib/timeline'
 import { cn } from '@/lib/utils'
-import type { Event, Vitals } from '@/types/api'
+import type { CareProfileFacts, Event, Vital } from '@/types/api'
 
 /**
  * The standing facts, beside the timeline rather than inside it.
@@ -27,13 +27,14 @@ import type { Event, Vitals } from '@/types/api'
  */
 export function ContextColumn({
   upcoming,
-  vitals,
+  profile,
   timeZone,
 }: {
   /** `undefined` while `/api/upcoming` is still in flight, or if it failed. */
   upcoming: Event[] | undefined
-  /** `undefined` until the session lands. Four blank rows is the correct render meanwhile. */
-  vitals: Vitals | undefined
+  /** The standing facts. `undefined` only until the session lands; the band then renders four
+      "Not recorded" rows, which is exactly what is known about her at that moment. */
+  profile: CareProfileFacts | undefined
   timeZone: string
 }) {
   const people = usePeople()
@@ -44,7 +45,10 @@ export function ContextColumn({
     // the top of a history that runs for pages. `self-start` is what stops the
     // flex row stretching the column to full height and killing the stick.
     <aside className="sticky top-6 hidden max-h-[calc(100vh-3rem)] w-[330px] shrink-0 flex-col gap-9 self-start overflow-y-auto pt-10 pb-6 lg:flex">
-      <VitalsBand vitals={vitals} />
+      <VitalsBand profile={profile} />
+
+      <ProfileList label="Medications" items={profile?.medications ?? []} />
+      <ProfileList label="Living with" items={profile?.conditions ?? []} />
 
       <section>
         <PanelLabel>Coming up</PanelLabel>
@@ -111,54 +115,104 @@ function PanelLabel({ children }: { children: ReactNode }) {
  * "Baseline" rather than the prototype's "Her baseline": the care recipient is whoever the family
  * says they are, and the record should not guess a pronoun for them.
  */
-const VITALS: { label: string; field: keyof Vitals; alert: boolean }[] = [
-  { label: 'NHS number', field: 'nhs_number', alert: false },
+interface VitalRow {
+  label: string
+  read: (facts: CareProfileFacts) => Vital | null
+  /** Red while empty as well as while filled. Allergies only. */
+  alert: boolean
+}
+
+/**
+ * The order they are asked for, which is also the order `_profile_lines` renders them in on the
+ * backend, so the brief and the band can be read side by side when one of them looks wrong.
+ */
+const VITALS: VitalRow[] = [
+  { label: 'NHS number', read: (f) => f.nhs_number, alert: false },
   // Red even while empty. An unknown allergy list is the alarming case, not the neutral one.
-  { label: 'Allergies', field: 'allergies', alert: true },
-  { label: 'RESPECT form', field: 'respect_form', alert: false },
-  { label: 'Baseline', field: 'baseline', alert: false },
+  { label: 'Allergies', read: (f) => f.allergies, alert: true },
+  { label: 'RESPECT form', read: (f) => f.respect_form, alert: false },
+  // "Baseline" rather than the prototype's "Her baseline": the care recipient is whoever the
+  // family says they are, and the record should not guess a pronoun for them.
+  { label: 'Baseline', read: (f) => f.baseline, alert: false },
 ]
 
 /**
- * ORDER MATCHES THE CARE BRIEF, and that is on purpose rather than by chance: `care_profile.
- * _vitals_line` renders the same four in the same sequence for the model, so a developer can
- * read a brief and this band side by side without translating between them.
+ * The four facts a clinician asks for before anything else, at the top of the column.
  *
- * THE DATE IS NOT DECORATION. A vital with no `confirmed_at` prints its value and nothing else,
- * which is honest — nobody has said when it was last true. One that has a date prints it, because
- * an allergies line carried forward untouched for two years is exactly the failure the field
- * exists to expose, and it is invisible unless the date is on screen next to the value.
+ * EVERY LABEL IS RENDERED WHETHER OR NOT IT HAS A VALUE. A row hidden because it is empty does
+ * not read as "we have not been told this" — it reads as "there is nothing here to tell", and
+ * for allergies those are opposite clinical statements. A record with four unknowns would look
+ * like a complete record, which is the single most dangerous thing this page could do with a gap.
+ *
+ * That is the exact opposite of what `care_profile._render_vitals` does, which omits the vitals
+ * nobody has stated. Both are right, because the readers are not the same one. The brief's reader
+ * is a filter, and a filter cannot act on an absence. This page's reader is a person about to
+ * decide something, and the absence is one of the most important things on the page.
+ *
+ * "NOT RECORDED", NOT A BLANK AND NOT "NONE". A blank cell cannot be told from a component that
+ * failed to render, and "None" is a clinical claim nobody made.
  */
-function VitalsBand({ vitals }: { vitals: Vitals | undefined }) {
+function VitalsBand({ profile }: { profile: CareProfileFacts | undefined }) {
+  return (
+    <dl className="space-y-3.5 rounded-lg bg-band px-4 py-4">
+      {VITALS.map(({ label, read, alert }) => {
+        const vital = profile ? read(profile) : null
+        // Empty-after-trim counts as absent, the same rule `Vital._clean_value` applies
+        // server-side, so a whitespace-only value cannot look filled in here while the brief
+        // treats it as missing.
+        const value = vital?.value?.trim()
+        const confirmed = vital?.confirmed_at?.trim()
+        return (
+          <div key={label}>
+            <dt
+              className={cn(
+                'text-[10.5px] font-semibold tracking-[0.1em]',
+                alert ? 'text-symptom' : 'text-muted-foreground',
+              )}
+            >
+              {label}
+            </dt>
+            <dd className="mt-1 text-[13.5px] leading-snug">
+              {value || <span className="text-muted-foreground">Not recorded</span>}
+              {value && (
+                // Shown for every vital that HAS a value, including undated ones. A stale
+                // allergies line is more dangerous than a missing one, and the date is the only
+                // thing that lets a reader tell them apart — so "Not confirmed" has to be as
+                // visible as a date. No staleness threshold: how old is too old is a clinical
+                // judgement about this person, not one this component can make.
+                <span className="mt-0.5 block text-[11.5px] text-muted-foreground">
+                  {confirmed ? `Confirmed ${confirmed}` : 'Not confirmed'}
+                </span>
+              )}
+            </dd>
+          </div>
+        )
+      })}
+    </dl>
+  )
+}
+
+/**
+ * "Medications" and "Living with" — the family's own words, never expanded or tidied.
+ *
+ * OMITTED ENTIRELY WHEN EMPTY, which is the opposite rule to the vitals band above, and the
+ * difference is what each silence means. Nobody is harmed by not knowing the list of conditions
+ * is empty; a heading over nothing just says the record is thin, which the timeline already says
+ * better. A blank ALLERGIES row is itself the clinical information.
+ */
+function ProfileList({ label, items }: { label: string; items: string[] }) {
+  const values = items.map((item) => item.trim()).filter(Boolean)
+  if (values.length === 0) return null
   return (
     <section>
-      <dl className="space-y-3.5 rounded-lg bg-band px-4 py-4">
-        {VITALS.map((item) => {
-          const vital = vitals?.[item.field]
-          return (
-            <div key={item.label}>
-              <dt
-                className={cn(
-                  'text-[10.5px] font-semibold tracking-[0.1em]',
-                  item.alert ? 'text-symptom' : 'text-muted-foreground',
-                )}
-              >
-                {item.label}
-              </dt>
-              {/* `min-h-[1lh]` is what keeps an empty value a visible gap rather than a collapsed
-                  row nobody notices is missing. */}
-              <dd className="mt-1 min-h-[1lh] text-[13.5px] leading-snug">
-                {vital?.value}
-                {vital?.confirmed_at ? (
-                  <span className="block text-[11.5px] text-muted-foreground">
-                    Confirmed {vital.confirmed_at}
-                  </span>
-                ) : null}
-              </dd>
-            </div>
-          )
-        })}
-      </dl>
+      <PanelLabel>{label}</PanelLabel>
+      <div className="mt-4 space-y-2.5">
+        {values.map((value) => (
+          <div key={value} className="text-[13.5px] leading-snug font-medium">
+            {value}
+          </div>
+        ))}
+      </div>
     </section>
   )
 }
