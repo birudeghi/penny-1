@@ -126,6 +126,19 @@ class CareProfile(BaseModel):
     # --- free text the interview could not slot anywhere else ---
     notes: str | None = Field(default=None, max_length=MAX_NOTES_CHARS)
 
+    # THE INTERVIEW IS DONE ASKING. Set by the server when the model reports nothing left worth
+    # asking for, or when a family says they would rather not answer. It exists because the
+    # obvious closing condition — "we know her name" — is wrong: corrections arrive AFTER the
+    # name is recorded, and questions two and three are usually answered after question one, so
+    # closing on a name shuts the interview exactly while the family is still answering it.
+    #
+    # DELIBERATELY NOT RENDERED into the brief, and therefore not in the hash. It says something
+    # about the conversation, not about who is being cared for, so flipping it must not read as
+    # a changed filter and re-read a household's entire history. This is the property the module
+    # docstring promises: a field the brief never prints cannot change what the model extracted,
+    # so it cannot change the hash either.
+    interview_closed: bool = False
+
     @field_validator("aliases", "conditions", "medications", "providers")
     @classmethod
     def _clean_list(cls, value: list[str]) -> list[str]:

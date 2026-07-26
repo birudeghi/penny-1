@@ -98,6 +98,11 @@ from app.ingest.contract import (
     UnknownGroupError,
 )
 from app.ingest.seam import ingest_messages
+from app.interview import (
+    MIN_ANSWER_CHARS,
+    capture_answer,
+)
+from app.interview import should_listen as should_listen_for_interview
 from app.mentions import has_mention_marker, mentions_penny, normalise_jid
 from app.models import Household, Message
 from app.onboarding import provision_for_group, welcome_message
@@ -577,14 +582,31 @@ async def gowa_webhook(
     # mention must be one answer, not five.
     reply = "not_mentioned"
     if result.inserted:
-        reply = await _maybe_schedule_reply(
+        # (f1) THE INTERVIEW OWNS THE MESSAGE WHILE IT IS OPEN, and that ownership is what
+        # stops Penny answering the same message twice. A family answering "who are you looking
+        # after?" sometimes @-mentions her out of politeness, and without a single owner that
+        # one message would earn both an interview read-back and an assistant reply. While the
+        # care profile is unestablished the interview takes every message; once it is
+        # established `should_listen` returns False forever and the mention path is the only
+        # one left. Unlike the reply path this does NOT require a mention — nobody @-mentions a
+        # bot to answer its own question, they just reply, which is the whole reason the answer
+        # was being dropped before this existed.
+        reply = await _maybe_schedule_interview(
             background,
             household_id=result.household_id,
             chat_id=payload.chat_id,
             provider_message_id=payload.id,
             text=text,
-            raw_payload=raw_payload,
         )
+        if reply == "interview_not_open":
+            reply = await _maybe_schedule_reply(
+                background,
+                household_id=result.household_id,
+                chat_id=payload.chat_id,
+                provider_message_id=payload.id,
+                text=text,
+                raw_payload=raw_payload,
+            )
     return {"status": "ok", "inserted": result.inserted, "reply": reply}
 
 
@@ -991,6 +1013,121 @@ def _reply_allowed(household_id: UUID) -> bool:
         return False
     hits.append(now)
     return True
+
+
+async def _maybe_schedule_interview(
+    background: BackgroundTasks,
+    *,
+    household_id: UUID,
+    chat_id: str,
+    provider_message_id: str,
+    text: str | None,
+) -> str:
+    """Decide whether this message is the interview's. Returns the reason, for the response body.
+
+    `interview_not_open` is the ONE return value the caller acts on: it is what hands the
+    message back to the mention path. Every other outcome — too short, window closed, rate
+    limited — means the interview considered this message and is done with it, and the mention
+    path must not get a second go, because "we already decided not to speak" is not the same as
+    "nobody has decided yet".
+
+    Reads the household on the request's own session, which is cheap and already open. The LLM
+    call is not here: the handler owes GOWA a 200 inside 10 seconds.
+    """
+    if not text or len(text.strip()) < MIN_ANSWER_CHARS:
+        return "interview_not_open"
+    household = await _session_household(household_id)
+    if household is None or not should_listen_for_interview(household):
+        return "interview_not_open"
+    if not _reply_allowed(household_id):
+        # The same limiter the mention path uses, and deliberately the same budget: the
+        # interview is Penny speaking unprompted, which is the louder of the two.
+        log.warning(
+            "webhook.interview_rate_limited",
+            extra={"household_id": str(household_id), "chat_id": chat_id},
+        )
+        return "rate_limited"
+    log.info(
+        "webhook.interview_scheduled",
+        extra={
+            "household_id": str(household_id),
+            "chat_id": chat_id,
+            "provider_message_id": provider_message_id,
+        },
+    )
+    background.add_task(spawn_interview, household_id, chat_id, provider_message_id, text or "")
+    return "interview"
+
+
+async def spawn_interview(
+    household_id: UUID,
+    chat_id: str,
+    provider_message_id: str,
+    text: str,
+) -> None:
+    """DETACH the interview turn, for the same reason `spawn_reply` detaches — see there."""
+    task = asyncio.create_task(run_interview(household_id, chat_id, provider_message_id, text))
+    _RUNNING.add(task)
+    task.add_done_callback(_RUNNING.discard)
+
+
+async def run_interview(
+    household_id: UUID,
+    chat_id: str,
+    provider_message_id: str,
+    text: str,
+) -> None:
+    """Record what the family said about the person they care for, and say it back.
+
+    NOTHING ESCAPES. Waits for the request to commit first, exactly as the reply path does: the
+    interview reads this household's recent messages to find an answer split across several of
+    them, and a connection opened before the request committed cannot see the one that just
+    arrived.
+
+    `chat_id` comes from the delivery that triggered this and is never derived from the
+    household, so there is no path by which one family's read-back reaches another's group.
+    """
+    try:
+        if not await _await_commit(household_id, provider_message_id):
+            log.warning("webhook.interview_message_never_committed", extra={"chat_id": chat_id})
+            return
+        async with get_sessionmaker()() as session:
+            household = await session.get(Household, household_id)
+            if household is None:
+                log.warning(
+                    "webhook.interview_household_missing",
+                    extra={"household_id": str(household_id)},
+                )
+                return
+            outcome = await capture_answer(session, household, text)
+            if outcome is None:
+                return
+            # COMMIT THE RECORD BEFORE SPEAKING. The read-back tells a family what Penny now
+            # knows; saying it and then failing to store it is the exact failure this module
+            # was built to remove, and it is worse the second time because they have been told.
+            await session.commit()
+        if outcome.reply is None:
+            return
+        result = await outbound.send_to_group(chat_id, outcome.reply)
+        log.info(
+            "webhook.interview_sent" if result.ok else "webhook.interview_send_failed",
+            extra={
+                "household_id": str(household_id),
+                "chat_id": chat_id,
+                "kind": outcome.kind,
+                "brief_changed": outcome.brief_changed,
+                "messages_recalled": outcome.messages_recalled,
+                "error": result.error,
+            },
+        )
+    except Exception:
+        log.exception("webhook.interview_failed", extra={"household_id": str(household_id)})
+
+
+async def _session_household(household_id: UUID) -> Household | None:
+    """The household row, on its own short-lived session. None when it is not there yet."""
+    async with get_sessionmaker()() as session:
+        return await session.get(Household, household_id)
 
 
 async def _maybe_schedule_reply(

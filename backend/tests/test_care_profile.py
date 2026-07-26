@@ -261,3 +261,19 @@ def test_is_established_turns_true_on_a_name_alone() -> None:
     assert not cp.CareProfile().is_established()
     assert not cp.CareProfile(conditions=["Heart failure"]).is_established()
     assert cp.CareProfile(name="Juno").is_established()
+
+
+def test_closing_the_interview_does_not_change_the_hash() -> None:
+    """`interview_closed` says something about the CONVERSATION, not about who is cared for.
+
+    It is set the moment Penny stops asking, on a household whose history may be six months
+    long. If it were in the hash, that flag flipping would clear the extraction cursor and
+    re-read every message the family ever sent, against a $15/month pot, because a chat ended.
+
+    This holds for the reason the module docstring gives: the hash covers the lines
+    `_profile_lines` prints, and this field is never printed.
+    """
+    open_ = cp.CareProfile(name="Juno Alden", conditions=["Heart failure"])
+    closed = open_.model_copy(update={"interview_closed": True})
+    assert cp.brief_hash(open_) == cp.brief_hash(closed)
+    assert "interview" not in cp.render_brief(closed, participants=[], timezone="UTC").lower()
