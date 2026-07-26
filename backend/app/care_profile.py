@@ -39,10 +39,20 @@ hashes the same, and costs nothing. `write_profile` is the only function that ma
 `households.care_profile`, because it is the only place that comparison happens: a profile
 stored by any other route sharpens the filter and never reaches the history it was meant to fix.
 
-VITALS ARE CLINICAL SAFETY DATA. `allergies` and `respect_form` are read by people making
+VITALS ARE CLINICAL SAFETY DATA. `nhs_number`, `allergies`, `respect_form` and `baseline` are
+the four facts somebody asks for before anything else, and they are read by people making
 decisions in a hurry. A blank allergies line is honest and useful; a stale one is dangerous,
 which is why every vital carries `confirmed_at` and the renderer prints the date beside the
 value. Penny does not decide these are still true — the family does, and the record says when.
+
+THE BRIEF AND THE WEB UI TREAT AN ABSENT VITAL IN OPPOSITE WAYS, ON PURPOSE. `_render_vitals`
+OMITS a vital nobody has stated, because the model's reader is a filter and four lines of
+"unknown" are prompt weight carrying no signal — they cannot make a message more or less
+relevant, they can only crowd out the transcript. `frontend/src/components/person-header.tsx`
+PRINTS all four labels always, blank or not, because its reader is a person deciding something:
+a hidden allergies row is indistinguishable from "she has no allergies", and that particular
+misreading is the one this record must never invite. Neither is a compromise of the other. If
+you change one of them, do not change the other to match — read both docstrings first.
 """
 
 from __future__ import annotations
@@ -75,6 +85,9 @@ MAX_ALIASES = 8
 MAX_LIST_ITEMS = 20
 MAX_ITEM_CHARS = 120
 MAX_NOTES_CHARS = 1_000
+# Long enough for "2026-07-25", for the "Jan 2026" a family types instead, and for nothing that
+# belongs in a sentence. See `Vital._clean` for why this truncates rather than rejects.
+MAX_CONFIRMED_AT_CHARS = 40
 
 
 class Vital(BaseModel):
@@ -83,6 +96,13 @@ class Vital(BaseModel):
     `confirmed_at` is not `updated_at`: it records when somebody said "yes, still true", not
     when a row was written. An allergies line carried forward untouched for two years is
     exactly the case the date exists to expose.
+
+    It is deliberately a free string and not a `date`. The value arrives from a WhatsApp reply
+    via a language model, and families write "Jan 2026" and "last year's review" as readily as
+    they write a date. Parsing strictly would raise inside `interview.capture_answer`, and the
+    cost of that is not a bad date — it is the ENTIRE turn's record, name and conditions and
+    all, discarded because a provenance note was phrased in prose. A date the renderers pass
+    through verbatim is worth more than a field that can swallow the answer it annotates.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -91,6 +111,43 @@ class Vital(BaseModel):
     # ISO date string, not a datetime: this is set from a WhatsApp reply, and a date is the
     # most precision that claim ever honestly has.
     confirmed_at: str | None = None
+
+    @field_validator("value")
+    @classmethod
+    def _clean_value(cls, value: str) -> str:
+        """Collapse whitespace. This is a hash rule, not a tidiness one.
+
+        `brief_hash` is taken over the rendered brief, so `"Penicillin "` and `"Penicillin"`
+        are two different filters as far as `write_profile` is concerned: the same allergy
+        re-stated with a trailing space would clear the extraction cursor and re-read a
+        household's entire history, billed against a $15/month pot, for a filter that is
+        word-for-word the one that already ran. `_clean_list` enforces the same rule on the
+        list fields for the same reason; a vital is not exempt from it.
+
+        It also closes the one way a vital could put a dangling label into the brief. A value
+        of `"   "` is truthy, so `_render_vitals` would have printed `Allergies:` followed by
+        nothing — which reads as an allergy the record cannot make out, rather than as the
+        absence of one, and those are very different sentences to put in front of a clinician.
+        Normalised to empty here it is simply absent, which is the truth.
+        """
+        return " ".join(value.split())
+
+    @field_validator("confirmed_at")
+    @classmethod
+    def _clean_confirmed_at(cls, value: str | None) -> str | None:
+        """Collapse whitespace as above, then TRUNCATE rather than reject.
+
+        A `max_length` constraint raises, and a raise on this model lands inside
+        `interview.capture_answer`, where the failure mode is not a rejected date — it is the
+        whole turn's record, name and conditions and all, discarded in silence because a
+        provenance note ran long. `value` keeps its declared cap because the schema is also how
+        the model is told how long an answer may be; the date, which nothing else bounds, is
+        cut to fit instead. A truncated date still reads as approximately when, which is all
+        this field ever claimed.
+        """
+        if value is None:
+            return None
+        return " ".join(value.split())[:MAX_CONFIRMED_AT_CHARS]
 
 
 class CareProfile(BaseModel):
@@ -447,10 +504,20 @@ def _describe(profile: CareProfile) -> str:
 def _render_vitals(profile: CareProfile) -> str:
     """Vitals as one line, each carrying the date it was last confirmed.
 
-    Absent vitals are omitted rather than printed as "unknown": the model does not need to be
-    told what nobody has said, and a line of blanks is prompt weight for no signal. The web
-    UI does the opposite and keeps the blank rows visible, because there a missing allergies
-    line is information a reader should see.
+    ABSENT VITALS ARE OMITTED rather than printed as "unknown". This reader is a filter, and a
+    filter cannot act on an absence: "NHS number: unknown" cannot make a message more or less
+    relevant, it can only take room in a chunk that the transcript wanted. Four of them is four
+    lines of prompt weight carrying no signal at all.
+
+    `frontend/src/components/person-header.tsx` does the exact opposite and keeps every blank
+    row on screen, because its reader is a person about to decide something and "we do not know
+    her allergies" is one of the most important sentences the page can say. Neither renderer is
+    a degraded version of the other; the two readers want opposite things from the same gap.
+
+    ORDER IS PART OF THE HASH CONTRACT. These four are rendered in the order somebody asks for
+    them, and that order is also what `brief_hash` sees — reordering them re-reads every
+    household's history for a brief that says the same thing. The web band prints them in the
+    same order for the reader's sake, not for the hash's, so the two can be read side by side.
     """
     named = (
         ("NHS number", profile.nhs_number),
