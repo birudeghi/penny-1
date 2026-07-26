@@ -1,7 +1,13 @@
-"""Household settings: rename, change the shared passphrase, delete everything.
+"""Household settings: rename, edit who Penny is caring for, change the passphrase, delete it all.
 
 There is no users table. One household is one tenant, one shared credential and one care
 recipient, so "account settings" and "household settings" are the same screen.
+
+One field on that screen is unlike the others. The care profile is not a display preference,
+it is the specification extraction filters by, so editing it can put a household's entire
+message history back on the extraction cursor to be re-read against the sharper filter. That
+decision is not made here — `app.care_profile.write_profile` owns it, and this module's job is
+to make sure every edit that could change the brief goes through it.
 """
 
 from __future__ import annotations
@@ -12,6 +18,7 @@ from zoneinfo import available_timezones
 
 from fastapi import APIRouter, Response, status
 
+from app.care_profile import load, write_profile
 from app.deps import CurrentHousehold, SessionDep
 from app.errors import UnauthorizedError, ValidationError
 from app.schemas import (
@@ -45,7 +52,13 @@ async def patch_household(
     ctx: CurrentHousehold,
     session: SessionDep,
 ) -> HouseholdOut:
-    """All fields optional; send only what changed."""
+    """All fields optional; send only what changed.
+
+    Optional means `model_fields_set`, not "not None": a field the client omitted and a field
+    it sent as null are different requests, and only the first one must leave the stored value
+    alone. Reading `patch.timezone is not None` alone would make every partial save a full
+    overwrite with defaults.
+    """
     household = ctx.household
     provided = patch.model_fields_set
 
@@ -59,8 +72,34 @@ async def patch_household(
         household.timezone = patch.timezone
     if "name" in provided and patch.name is not None:
         household.name = patch.name
-    if "care_recipient_name" in provided and patch.care_recipient_name is not None:
+
+    renamed = "care_recipient_name" in provided and patch.care_recipient_name is not None
+    if renamed:
         household.care_recipient_name = patch.care_recipient_name
+
+    # THE ONLY EDIT ON THIS SCREEN THAT CAN COST MONEY, and the reason it is not three more
+    # attribute assignments. `write_profile` compares the rendered brief against the stored
+    # hash and clears `messages.extracted_at` only when the filter genuinely changed, so a
+    # sharpened profile reaches the history it was meant to fix and an idle save does not
+    # re-read six months of chat.
+    #
+    # The rename goes through it too. `care_recipient_name` is the brief's fallback name, so
+    # for a household whose interview has not run it IS the filter, and correcting a
+    # placeholder to "Mum" changes what counts as relevant. It runs AFTER the assignment above
+    # for that reason: hashing first would render the old brief, match the stored hash, and
+    # leave the history filtered by the placeholder.
+    #
+    # Neither `name` nor `timezone` is in this condition, and that is the point of the hash
+    # living where it does — `render_brief` appends the timezone after the hashed lines, so a
+    # family fixing a typo in their timezone never pays for a re-read. `test_care_profile_write`
+    # asserts that from this handler rather than trusting the hash to keep excluding it.
+    if renamed or ("care_profile" in provided and patch.care_profile is not None):
+        # A rename with no profile in the request re-writes the stored profile through
+        # `load()`. That round trip is lossless for anything Penny can read, and a blob it
+        # cannot read is already treated as absent by extraction, the assistant and the feed —
+        # so nothing that has ever reached a family is lost by normalising it here.
+        profile = patch.care_profile if patch.care_profile is not None else load(household)
+        await write_profile(session, household, profile)
 
     await session.flush()  # never commit: get_session owns the transaction
     return to_household(household)
