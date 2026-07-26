@@ -82,6 +82,13 @@ class FakeGowa:
         self.content_type = "audio/wav"
         self.status = 200
         self.require_device_id = False
+        # THE LIVE SIDECAR DOES NOT STREAM BYTES FROM /download. It answers 200 JSON naming a
+        # path under its own statics, and the bytes are a second request away. This double
+        # answered with the bytes directly, which is how the client's wrong single-hop
+        # assumption passed every test while failing on every real photograph and voice note —
+        # the same lesson as the missing `phone`, one bug later. The pointer is overridable so
+        # tests can serve a hostile one.
+        self.pointer: str = "statics/media/test/fake-file"
         # Chunked responses declare no length, which is what forces the mid-stream cap to be
         # the thing doing the refusing rather than the content-length pre-check.
         self.chunked = False
@@ -138,7 +145,7 @@ class FakeGowa:
                 if path == "/devices":
                     self._json(200, {"code": "SUCCESS", "results": [{"id": "dev-1"}]})
                     return
-                if not path.endswith("/download"):
+                if not path.endswith("/download") and not path.startswith("/statics/"):
                     self._json(404, {"code": "NOT_FOUND"})
                     return
                 # GOWA REQUIRES `phone` HERE AND THIS DOUBLE DID NOT. That gap is what let a
@@ -148,16 +155,33 @@ class FakeGowa:
                 # Voice notes went untranscribed and photographs unstored on every message,
                 # with nothing raised. A double more permissive than the real thing does not
                 # test an integration, it conceals it.
-                if not params.get("phone"):
-                    self._json(400, {"code": "VALIDATION_ERROR", "message": "phone: cannot be blank."})
-                    return
-                if fake.require_device_id and "device_id" not in params:
-                    self._json(400, {"code": "DEVICE_ID_REQUIRED"})
-                    return
-                if fake.media is None:
-                    self._json(fake.status, {"code": "MEDIA_NOT_FOUND"})
+                if path.endswith("/download"):
+                    if not params.get("phone"):
+                        self._json(
+                            400,
+                            {"code": "VALIDATION_ERROR", "message": "phone: cannot be blank."},
+                        )
+                        return
+                    if fake.require_device_id and "device_id" not in params:
+                        self._json(400, {"code": "DEVICE_ID_REQUIRED"})
+                        return
+                    if fake.media is None:
+                        self._json(fake.status, {"code": "MEDIA_NOT_FOUND"})
+                        return
+                    # The live shape: the file was written server-side, here is its path.
+                    self._json(
+                        200,
+                        {
+                            "code": "SUCCESS",
+                            "results": {"file_path": fake.pointer, "media_type": "audio"},
+                        },
+                    )
                     return
 
+                # The second hop: GOWA's static file server handing over the saved bytes.
+                if fake.media is None:
+                    self._json(404, {"code": "NOT_FOUND"})
+                    return
                 self.send_response(200)
                 self.send_header("content-type", fake.content_type)
                 if fake.chunked:
@@ -632,8 +656,53 @@ async def test_download_media_self_heals_a_device_id_requirement(
         f"/message/{PROVIDER_MESSAGE_ID}/download",  # guess-free first attempt
         "/devices",  # then ask which device
         f"/message/{PROVIDER_MESSAGE_ID}/download",  # then retry
+        "/statics/media/test/fake-file",  # then follow the pointer to the bytes
     ]
-    assert fake_gowa.requests[-1][1]["device_id"] == "dev-1"
+    downloads = [params for path, params in fake_gowa.requests if path.endswith("/download")]
+    assert downloads[-1]["device_id"] == "dev-1"
+
+
+async def test_download_media_follows_the_pointer_to_the_statics_bytes(
+    fake_gowa: FakeGowa, configured: Callable[..., Settings]
+) -> None:
+    """THE LIVE PROTOCOL, PINNED. /download answers JSON naming a path under statics; the bytes
+    are a second request. The single-hop client passed every test and failed every real message,
+    so the shape of the exchange is now an assertion, not an assumption."""
+    media = await gowa.download_media(PROVIDER_MESSAGE_ID, CHAT_ID)
+
+    assert media is not None
+    assert media[0] == AUDIO
+    paths = [path for path, _ in fake_gowa.requests]
+    assert paths == [
+        f"/message/{PROVIDER_MESSAGE_ID}/download",
+        "/statics/media/test/fake-file",
+    ]
+
+
+async def test_download_media_refuses_a_pointer_that_leaves_the_sidecar(
+    fake_gowa: FakeGowa, configured: Callable[..., Settings]
+) -> None:
+    """The pointer is a path from another process's response body, about to become our next
+    request line — and httpx ignores `base_url` when handed an absolute URL. A sidecar answering
+    `https://elsewhere/...` must not have this process fetch it with our auth header attached.
+    """
+    fake_gowa.pointer = "https://elsewhere.example/statics/media/x"
+
+    assert await gowa.download_media(PROVIDER_MESSAGE_ID, CHAT_ID) is None
+    paths = [path for path, _ in fake_gowa.requests]
+    assert paths == [f"/message/{PROVIDER_MESSAGE_ID}/download"], "nothing may follow it"
+
+
+async def test_download_media_refuses_a_pointer_that_climbs_out_of_statics(
+    fake_gowa: FakeGowa, configured: Callable[..., Settings]
+) -> None:
+    for hostile in ("statics/../app/secrets", "storages/chatstorage.db", "statics\\..\\x"):
+        fake_gowa.pointer = hostile
+        fake_gowa.requests.clear()
+
+        assert await gowa.download_media(PROVIDER_MESSAGE_ID, CHAT_ID) is None
+        paths = [path for path, _ in fake_gowa.requests]
+        assert paths == [f"/message/{PROVIDER_MESSAGE_ID}/download"], hostile
 
 
 async def test_download_media_refuses_a_body_that_declares_itself_too_big(

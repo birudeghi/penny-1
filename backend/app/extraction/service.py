@@ -123,10 +123,11 @@ OPEN_EVENT_MAX_AGE = timedelta(days=400)
 # this whole mechanism exists to prevent:
 #
 #     webhooks.COMMIT_WAIT_TRIES * COMMIT_WAIT_SECONDS   60 * 0.25  =  15s
-#     gowa.MEDIA_TIMEOUT (the whole download)                          30s
+#     gowa.MEDIA_TIMEOUT x 2 (pointer, then the statics fetch —
+#       the live sidecar answers /download with a path, not bytes)     60s
 #     the OpenAI client timeout in app.openai_client                   90s
 #                                                                    -----
-#                                                                     135s
+#                                                                     165s
 #
 # Two minutes was under that. `test_voice_end_to_end` asserts the inequality against the three
 # constants themselves, so raising any of those timeouts fails a test here rather than quietly

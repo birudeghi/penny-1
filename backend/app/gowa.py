@@ -81,6 +81,7 @@ DEVICE_ID_HEADER = "X-Device-Id"
 MEDIA_TOO_LARGE = "gowa_media_too_large"
 MEDIA_EMPTY = "gowa_media_empty"
 MEDIA_NOT_BINARY = "gowa_media_not_binary"
+MEDIA_BAD_POINTER = "gowa_media_bad_pointer"
 
 # GOWA's `code` is a SCREAMING_SNAKE enum. Anything else in that field is treated as absent
 # rather than passed on: the sibling `message` field can echo the text we just sent, and a
@@ -379,7 +380,7 @@ async def download_media(provider_message_id: str, chat_id: str | None) -> tuple
 
     path = f"/message/{quote(provider_message_id, safe='')}/download"
     params: dict[str, Any] = {"phone": chat_id}
-    media, error = await _download(path, params=params)
+    media, error, pointer = await _download(path, params=params)
 
     if error == DEVICE_ID_REQUIRED:
         # Same self-healing shape as `send_message`: never guess whether v9 wants a device id
@@ -389,13 +390,25 @@ async def download_media(provider_message_id: str, chat_id: str | None) -> tuple
             log.warning("gowa.media_no_device")
             return None
         log.info("gowa.media_retry_with_device")
-        media, error = await _download(
+        media, error, pointer = await _download(
             path,
             # `phone` rides along on the retry too. Dropping it here would turn a device-id
             # problem into the validation error above, one layer further from the cause.
             params={**params, "device_id": device_id},
             headers={DEVICE_ID_HEADER: device_id},
         )
+
+    if pointer is not None:
+        # THIS GOWA DOES NOT STREAM THE FILE FROM /download. Verified against the live sidecar,
+        # 2026-07-26: the route fetches and decrypts the blob from WhatsApp, writes it under its
+        # own `statics/media/...`, and answers 200 with JSON carrying `file_path`. The bytes are
+        # a SECOND request away. The first version of this client expected them in the first
+        # response, classified the JSON as MEDIA_NOT_BINARY, and returned None — which every
+        # caller reads as "this message has no media", so the failure wore the same uniform as
+        # the phone-parameter bug fixed hours earlier: photographs and voice notes silently
+        # absent, nothing red anywhere. `_pointer_path` validates the path before it is fetched;
+        # see there for why that is a security boundary and not tidiness.
+        media, error, _ = await _download(f"/{pointer}")
 
     if media is None:
         # No message id, no content: an id is a handle, and the reason is an enum of ours.
@@ -414,12 +427,19 @@ async def _download(
     *,
     params: dict[str, Any] | None = None,
     headers: dict[str, str] | None = None,
-) -> tuple[tuple[bytes, str] | None, str | None]:
+) -> tuple[tuple[bytes, str] | None, str | None, str | None]:
     """`_call`'s sibling for a binary body. Separate because `_call` parses JSON, and a JSON
-    parse of an audio file is a `UnicodeDecodeError` reported as "sidecar unreachable"."""
+    parse of an audio file is a `UnicodeDecodeError` reported as "sidecar unreachable".
+
+    Returns `(media, error, pointer)`, at most one of them set. `pointer` is the third shape a
+    200 can take on this sidecar: JSON saying the file was written under GOWA's own statics and
+    naming the path — the live `/message/{id}/download` behaviour. The caller makes the second
+    request; this function only reports what it got, because it cannot know whether it is
+    fetching the pointer or already following one.
+    """
     base = _base_url()
     if not base:
-        return None, UNCONFIGURED
+        return None, UNCONFIGURED, None
     limit = get_settings().transcription_max_bytes
     try:
         async with (
@@ -437,33 +457,73 @@ async def _download(
                     extra={"status": response.status_code, "code": code},
                 )
                 if code == "DEVICE_ID_REQUIRED":
-                    return None, DEVICE_ID_REQUIRED
-                return None, f"gowa_http_{response.status_code}"
+                    return None, DEVICE_ID_REQUIRED, None
+                return None, f"gowa_http_{response.status_code}", None
 
             content_type = _content_type(response)
             if content_type.startswith("application/json"):
-                # A 200 carrying JSON is GOWA telling us something, not audio. Sending it
-                # to a transcription endpoint would pay for a nonsense answer.
+                # A 200 carrying JSON is GOWA telling us something. On the download route the
+                # normal something is "I wrote the file HERE" — surface the path and let the
+                # caller fetch it. JSON with no usable path is still not media.
                 await response.aread()
-                return None, MEDIA_NOT_BINARY
+                pointer = _pointer_path(response)
+                if pointer is not None:
+                    return None, None, pointer
+                return None, MEDIA_NOT_BINARY, None
 
             declared = response.headers.get("content-length")
             if declared and declared.isdigit() and int(declared) > limit:
                 # Refuse before reading a byte when the response says how big it is.
-                return None, MEDIA_TOO_LARGE
+                return None, MEDIA_TOO_LARGE, None
 
             body = bytearray()
             async for chunk in response.aiter_bytes():
                 body.extend(chunk)
                 if len(body) > limit:
                     # And refuse mid-stream when it did not, or lied.
-                    return None, MEDIA_TOO_LARGE
+                    return None, MEDIA_TOO_LARGE, None
             if not body:
-                return None, MEDIA_EMPTY
-            return (bytes(body), content_type), None
+                return None, MEDIA_EMPTY, None
+            return (bytes(body), content_type), None, None
     except Exception as exc:
         log.warning("gowa.media_unreachable", extra={"exc_type": type(exc).__name__})
-        return None, UNREACHABLE
+        return None, UNREACHABLE, None
+
+
+def _pointer_path(response: httpx.Response) -> str | None:
+    """The relative statics path out of a download response, or None if there is not a safe one.
+
+    The live response shape (captured 2026-07-26, GOWA on Railway):
+
+        {"code": "SUCCESS", "message": "Media downloaded successfully to statics/media/...",
+         "results": {"file_path": "statics/media/<chat>/<date>/<name>", "file_url": "...",
+                     "media_type": "image", "file_size": 385750}}
+
+    `file_path` is used and `file_url` is deliberately ignored: the url names whatever public
+    domain GOWA thinks it has, and the bytes must come over the same private base the first
+    request used.
+
+    THE PREFIX CHECK IS A SECURITY BOUNDARY. This path came out of another process's response
+    body and is about to become our next request line. httpx resolves an absolute URL against
+    nothing — `base_url` is ignored — so without the check a compromised or misconfigured
+    sidecar answering `https://elsewhere/...` would have this process fetch an arbitrary URL
+    with our basic-auth header attached. Requiring the documented `statics/` prefix and refusing
+    `..` and backslashes keeps the second hop inside the sidecar whatever the first hop said.
+    A refusal logs and returns None, which the caller reports as `MEDIA_BAD_POINTER`-shaped
+    absence rather than following it anywhere.
+    """
+    try:
+        results = response.json().get("results") or {}
+    except ValueError:
+        return None
+    raw = results.get("file_path")
+    if not isinstance(raw, str) or not raw:
+        return None
+    path = raw.lstrip("/")
+    if "://" in path or ".." in path or "\\" in path or not path.startswith("statics/"):
+        log.warning("gowa.media_bad_pointer", extra={"error": MEDIA_BAD_POINTER})
+        return None
+    return path
 
 
 def _content_type(response: httpx.Response) -> str:

@@ -88,22 +88,37 @@ class _FakeGowa:
         server = self
 
         class Handler(BaseHTTPRequestHandler):
+            def _json(self, status: int, body: dict[str, Any]) -> None:
+                raw = json.dumps(body).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
             def do_GET(self) -> None:  # stdlib's spelling, not ours
                 server.requests.append(self.path)
+                path = urlparse(self.path).path
                 # GOWA requires `phone` on the download route and this double did not, which is
                 # how an outage that broke every voice note and every photograph lived under a
                 # green suite. See `test_transcription.FakeGowa` for the whole story.
-                if "/download" in self.path and not parse_qs(urlparse(self.path).query).get(
+                if path.endswith("/download") and not parse_qs(urlparse(self.path).query).get(
                     "phone", [""]
                 )[0]:
-                    payload = json.dumps(
-                        {"code": "VALIDATION_ERROR", "message": "phone: cannot be blank."}
-                    ).encode()
-                    self.send_response(400)
-                    self.send_header("Content-Type", "application/json")
-                    self.send_header("Content-Length", str(len(payload)))
-                    self.end_headers()
-                    self.wfile.write(payload)
+                    self._json(
+                        400, {"code": "VALIDATION_ERROR", "message": "phone: cannot be blank."}
+                    )
+                    return
+                # The live /download answers a POINTER, never the bytes — the second lesson from
+                # the same outage, one bug later. See `test_transcription.FakeGowa`.
+                if path.endswith("/download") and server.status == 200:
+                    self._json(
+                        200,
+                        {
+                            "code": "SUCCESS",
+                            "results": {"file_path": "statics/media/test/voice", "media_type": "audio"},
+                        },
+                    )
                     return
                 if server.status != 200:
                     payload = json.dumps({"code": "NOT_FOUND", "message": "gone"}).encode()
@@ -930,7 +945,10 @@ def test_the_grace_window_is_longer_than_the_slowest_run_that_could_still_succee
     # under-states a pathologically slow sidecar. It is the bound worth checking anyway: a
     # download that stalls chunk after chunk is a broken sidecar, not a slow transcription, and
     # no window can be written that covers it.
-    download = (gowa.MEDIA_TIMEOUT.connect or 0) + (gowa.MEDIA_TIMEOUT.read or 0)
+    #
+    # TIMES TWO: the live sidecar answers /download with a POINTER and the bytes are a second
+    # request to its statics, so the worst case is two full trips, not one.
+    download = 2 * ((gowa.MEDIA_TIMEOUT.connect or 0) + (gowa.MEDIA_TIMEOUT.read or 0))
     # Ask the client rather than restating its timeout — that is the constant that drifts.
     model_call = get_openai_client().timeout.read or 0
 

@@ -94,19 +94,39 @@ class _FakeGowa:
         server = self
 
         class Handler(BaseHTTPRequestHandler):
+            def _json(self, status: int, body: dict[str, Any]) -> None:
+                raw = json.dumps(body).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
             def do_GET(self) -> None:  # stdlib's spelling, not ours
                 server.requests.append(self.path)
-                if "/download" in self.path and not parse_qs(urlparse(self.path).query).get(
+                path = urlparse(self.path).path
+                # GOWA requires `phone` on the download route and this double did not, which is
+                # how an outage that broke every voice note and every photograph lived under a
+                # green suite. See `test_transcription.FakeGowa` for the whole story.
+                if path.endswith("/download") and not parse_qs(urlparse(self.path).query).get(
                     "phone", [""]
                 )[0]:
-                    payload = json.dumps(
-                        {"code": "VALIDATION_ERROR", "message": "phone: cannot be blank."}
-                    ).encode()
-                    self.send_response(400)
-                    self.send_header("Content-Type", "application/json")
-                    self.send_header("Content-Length", str(len(payload)))
-                    self.end_headers()
-                    self.wfile.write(payload)
+                    self._json(
+                        400, {"code": "VALIDATION_ERROR", "message": "phone: cannot be blank."}
+                    )
+                    return
+                # The live /download answers a POINTER, never the bytes: the file is written
+                # under the sidecar's own statics and fetched with a second request. The double
+                # that skipped this hop is how a single-hop client passed every test here while
+                # failing on every real photograph.
+                if path.endswith("/download") and server.status == 200:
+                    self._json(
+                        200,
+                        {
+                            "code": "SUCCESS",
+                            "results": {"file_path": "statics/media/test/photo", "media_type": "image"},
+                        },
+                    )
                     return
                 if server.status != 200:
                     payload = json.dumps({"code": "NOT_FOUND", "message": "gone"}).encode()
