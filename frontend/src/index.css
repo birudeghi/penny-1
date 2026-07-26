@@ -46,7 +46,17 @@
   letter-spacing: 0.18px;
   color-scheme: light dark;
   color: var(--text);
-  background: var(--bg);
+  /*
+   * `--ground` and not `--bg`, so the whole app stands on the one surface the record already
+   * stood on. This is what lets the header carry no background of its own: a header tinted to
+   * match the record would have been a grey strip over a white settings page, and a header left
+   * white would have drawn a line across the top of the record. One ground, no seam.
+   *
+   * It is also what the token was written for — see its own comment in `design.css`: "0.963 is
+   * far enough that every white surface lifts". Every white surface, not only the record's cards.
+   * `--bg` stays for the components that mean "a white panel" rather than "the page".
+   */
+  background: var(--ground);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;

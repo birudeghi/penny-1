@@ -18,23 +18,69 @@
   overflow-x: clip;
 }
 
+/*
+ * The chrome, and it is deliberately not a bar.
+ *
+ * NO BACKGROUND AND NO BORDER. It used to be a white strip with a rule under it, which drew a
+ * line across the top of the record and made the page read as an application containing a
+ * document. `--ground` is the record's own background, so the name and the timeline now sit on
+ * one continuous surface and the only horizontal lines on the screen are the ones the content
+ * puts there. Still sticky — losing the border does not mean losing the way back.
+ */
 .header {
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  background: var(--ground);
   position: sticky;
   top: 0;
   z-index: 1;
+  /*
+   * THE SAME COORDINATE SYSTEM AS THE RECORD, which is the only way the two can line up.
+   *
+   * `.bleed` below is `100vw`, which INCLUDES the scrollbar gutter; this header is a child of
+   * `.shell`, whose `100%` does not. On a platform with classic scrollbars the two centre their
+   * 1400px columns against widths that differ by the scrollbar, and the brand drifts off the
+   * name beneath it. Matching the basis costs one line and removes the whole class of problem.
+   */
+  width: 100vw;
+  margin-inline: calc(50% - 50vw);
 }
 
+/*
+ * MEASURED AGAINST THE RECORD, not against the reading column.
+ *
+ * Every other route is 880px of prose; the care record breaks out to 1400px (see `.bleed`). The
+ * header sat at 880 and its left edge therefore landed a couple of hundred pixels inside the
+ * record's — the brand floating over the timeline rather than starting where it starts. The
+ * record is the screen people are on, so the chrome lines up with that and the narrower routes
+ * sit centred beneath a wider header, which reads as a margin rather than as a misalignment.
+ *
+ * The 1400px cap and the inline padding below are the same measures `routes/feed.tsx` uses
+ * (`max-w-[1400px] px-8 xl:px-12`); changing one without the other is what put them out of step.
+ */
 .headerInner {
-  width: var(--shell-width);
-  max-width: 100%;
+  width: 100%;
+  max-width: 1400px;
   margin: 0 auto;
-  padding: 12px 20px;
+  /*
+   * `rem`, NOT px, and that is the whole alignment. The record's padding is Tailwind's
+   * `px-8 xl:px-12` — 2rem and 3rem — and `:root` in `index.css` sets `font: 17px`, so a rem
+   * here is 17px and those resolve to 34px and 51px. Writing the "same" 32 and 48 in pixels put
+   * the header three pixels outside the name on every screen: too small to see, too large to be
+   * right, and invisible in the CSS because both files looked like they said the same number.
+   *
+   * Vertical stays in px: it is the height of a bar, not a measure that should track type.
+   */
+  padding: 10px 2rem;
   box-sizing: border-box;
   display: flex;
   align-items: center;
   gap: var(--gap);
+}
+
+/* Tailwind's `xl`. Kept in step with `xl:px-12` on the record's container. */
+@media (min-width: 1280px) {
+  .headerInner {
+    padding-inline: 3rem;
+  }
 }
 
 .brand {
@@ -55,6 +101,17 @@
   gap: 4px;
   margin-left: auto;
   align-items: center;
+}
+
+/*
+ * The chrome's controls are smaller than the page's, and scoped here rather than applied to
+ * `.button` — that class is a form submit on twelve other screens, where 17px and a generous
+ * hit area are correct. Signing out is not a form submit. Matched to `.navLink`'s 34.5px so the
+ * three sit on one line rather than the button setting the height of the whole bar.
+ */
+.nav .button {
+  font-size: 15px;
+  padding: 5px 12px;
 }
 
 .navLink {
