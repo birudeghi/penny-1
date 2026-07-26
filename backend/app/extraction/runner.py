@@ -128,6 +128,11 @@ class SourceExcerpt:
     # a mis-heard drug name is the error that matters most in a care record, and it is only
     # checkable if the family can see which quotes came out of a microphone.
     transcribed: bool = False
+    # The quote is a model's description of a photo or a document — NOBODY said it. Stronger
+    # than `transcribed` and carried for the same reason: a family can check a description
+    # against the picture, which is still on the volume, and nobody else can. Shown as evidence
+    # without this flag it reads as a relative's own report of what they saw.
+    derived_from_media: bool = False
 
 
 @dataclass(slots=True)
@@ -755,6 +760,7 @@ def _attribute_quotes(quotes: list[str], sources: Sequence[ChunkMessage]) -> lis
                 sender=owner.sender_display_name,
                 quote=quote,
                 transcribed=owner.transcribed,
+                derived_from_media=owner.derived_from_media,
             )
         )
     return excerpts

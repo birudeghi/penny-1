@@ -14,6 +14,7 @@ from app.routers import (
     household,
     imports,
     internal,
+    media,
     members,
     reports,
     webhooks,
@@ -60,6 +61,7 @@ app.include_router(feed.router)  # GET /api/feed, /api/upcoming
 app.include_router(events.router)  # PATCH, DELETE /api/events/{id}
 app.include_router(household.router)  # PATCH, DELETE /api/household; password change
 app.include_router(members.router)  # GET /api/members; POST /api/members/{id}/merge
+app.include_router(media.router)  # GET /api/media/{message_id} — the tenant boundary that matters
 app.include_router(imports.router)  # POST /api/imports, /preview; GET /api/imports/{id}
 app.include_router(reports.router)  # GET /api/reports, /{id}; POST /api/reports/generate
 app.include_router(whatsapp.router)  # GET /api/whatsapp/status; POST /link, /relink

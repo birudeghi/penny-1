@@ -56,6 +56,10 @@ every caller, not just the webhook that scheduled the transcription. Extracting 
 before its transcript lands reads "[voice note]", finds nothing, and stamps `extracted_at` — so
 the transcript arrives seconds later against a message that will never be looked at again, and
 the fall it described is lost with no error anywhere. See `TRANSCRIPTION_GRACE`.
+
+A PHOTO OR A DOCUMENT IS HELD BACK THE SAME WAY, by `_awaiting_derivation`, while `app.media`
+reads it. Same window, same expiry, same silent failure being prevented — the rash in the photo
+instead of the fall in the recording.
 """
 
 from __future__ import annotations
@@ -78,7 +82,8 @@ from app.extraction.persist import persist_extraction
 from app.extraction.runner import OPEN_EVENTS_LIMIT, OpenEvent, extract_messages
 from app.llm.gateway import BudgetExceededError, LLMGateway
 from app.llm.recorder import DbRunRecorder
-from app.models import Event, Household, LlmRun, Message
+from app.media import DERIVABLE_MESSAGE_TYPES, DERIVED_MARKER
+from app.models import Event, Household, LlmRun, Member, Message
 from app.transcription import AUDIO_MESSAGE_TYPES, DOWNLOADABLE_PROVIDER, TRANSCRIBED_MARKER
 
 if TYPE_CHECKING:
@@ -343,9 +348,9 @@ async def households_due_for_extraction(session: AsyncSession) -> list[UUID]:
     at once. System messages are excluded on both sides so they can neither reach the count
     threshold nor keep a household on this list forever — they are stamped by `_stamp_inert`,
     which only runs once something else brings the household through. Voice notes still waiting
-    on a transcript are excluded for the same reason `_unextracted` excludes them: this query
-    must count exactly what that one would return, or the tick wakes a household to extract a
-    message the run will not be able to see.
+    on a transcript, and photos still waiting on a description, are excluded for the same reason
+    `_unextracted` excludes them: this query must count exactly what that one would return, or
+    the tick wakes a household to extract a message the run will not be able to see.
     """
     settings = get_settings()
     cutoff = datetime.now(UTC) - timedelta(hours=settings.extract_max_age_hours)
@@ -355,7 +360,7 @@ async def households_due_for_extraction(session: AsyncSession) -> list[UUID]:
             .where(
                 Message.extracted_at.is_(None),
                 Message.message_type != "system",
-                sa.not_(_awaiting_transcription()),
+                sa.not_(_awaiting_media_text()),
             )
             .group_by(Message.household_id)
             .having(
@@ -437,10 +442,11 @@ async def _unextracted(session: AsyncSession, household_id: UUID) -> list[ChunkM
     not by pretending they were extracted.
 
     A voice note whose transcript is still being fetched is excluded too, and NOT stamped: it is
-    coming back, in seconds, with words in it. `_awaiting_transcription` is the whole ordering
-    guarantee between transcription and extraction and it is one clause long on purpose — the
-    alternative, holding the household's advisory lock across an OpenAI call, orders this caller
-    against the other callers of this module and nothing else.
+    coming back, in seconds, with words in it. So is a photo or a document `app.media` is still
+    reading. `_awaiting_media_text` is the whole ordering guarantee between those two background
+    jobs and extraction, and it is two clauses long on purpose — the alternative, holding the
+    household's advisory lock across an OpenAI call, orders this caller against the other
+    callers of this module and nothing else.
     """
     rows = (
         await session.execute(
@@ -457,7 +463,7 @@ async def _unextracted(session: AsyncSession, household_id: UUID) -> list[ChunkM
                 Message.household_id == household_id,
                 Message.extracted_at.is_(None),
                 Message.message_type != "system",
-                sa.not_(_awaiting_transcription()),
+                sa.not_(_awaiting_media_text()),
             )
             .order_by(Message.sent_at, Message.source_ordinal, Message.id)
             .limit(get_settings().extract_max_batch_messages)
@@ -515,6 +521,46 @@ def _awaiting_transcription() -> sa.ColumnElement[bool]:
     )
 
 
+def _awaiting_derivation() -> sa.ColumnElement[bool]:
+    """A photo or a document we have asked a model to read and have not heard back about yet.
+
+    `_awaiting_transcription`'s twin, clause for clause and for the identical reason: a
+    "[photo]" extracted at second 3 and described at second 4 is a row that was stamped
+    `extracted_at` before its words existed, and the description then lands on a message
+    nothing will look at again. No exception, no failed run — just a rash nobody reads about.
+
+    The clauses mirror `app.media._skip_reason`, because withholding is only ever correct when
+    a description is actually coming: derivation switched on, an image or a document, delivered
+    by GOWA with an id we can fetch by, no marker yet, and younger than the same grace window.
+    If those two predicates ever drift apart we are hiding a message to wait for something that
+    will never happen.
+
+    Note the deliberate asymmetry with storage: this asks only about the WORDS. A file that was
+    kept but not described (an HEIC, a 12 MB scan, an over-budget household) has no marker, so
+    it is withheld for the grace window and then extracts as "[photo]" — exactly the behaviour
+    before any of this existed, a few minutes late.
+    """
+    if not get_settings().derive_media_text:
+        return sa.false()
+    return sa.and_(
+        Message.message_type.in_(sorted(DERIVABLE_MESSAGE_TYPES)),
+        Message.provider == DOWNLOADABLE_PROVIDER,
+        Message.provider_message_id.isnot(None),
+        sa.not_(Message.payload.has_key(DERIVED_MARKER)),
+        Message.ingested_at > sa.func.now() - TRANSCRIPTION_GRACE,
+    )
+
+
+def _awaiting_media_text() -> sa.ColumnElement[bool]:
+    """Either half of the rule above: words are on their way for this row, so do not read it yet.
+
+    One name for the two, so a caller cannot remember one and forget the other — which is
+    precisely how the second one would come to be missing from `households_due_for_extraction`
+    and the tick would start waking households to extract messages the run then refuses to see.
+    """
+    return sa.or_(_awaiting_transcription(), _awaiting_derivation())
+
+
 def _as_chunk_message(row: Any) -> ChunkMessage:
     """One selected row -> what the chunker reads. `payload` is optional on the row."""
     payload = getattr(row, "payload", None) or {}
@@ -527,6 +573,7 @@ def _as_chunk_message(row: Any) -> ChunkMessage:
         media_filename=payload.get("filename"),
         source_ordinal=row.source_ordinal,
         transcribed=bool(payload.get(TRANSCRIBED_MARKER)),
+        derived_from_media=bool(payload.get(DERIVED_MARKER)),
     )
 
 

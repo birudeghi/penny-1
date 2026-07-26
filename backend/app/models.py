@@ -273,6 +273,28 @@ class Message(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=sa.text("'{}'::jsonb"), default=dict
     )
+    # --- the media file, when we kept one -------------------------------------------------
+    #
+    # THREE COLUMNS AND NOT A JSONB BLOCK, because one of them is read by the route that hands
+    # a photograph of an 84-year-old back to a browser and that read must be a plain, boring
+    # column comparison. `media_content_type IS NOT NULL` is the whole of "we have bytes for
+    # this message"; digging it out of `payload` would put a JSONB path expression in the most
+    # consequential tenant query in the product.
+    #
+    # There is deliberately NO path column. The file lives at `<media_root>/<household_id>/
+    # <message_id>` and that layout is derived, never stored — a stored path is a string an
+    # attacker (or a bug) could aim at another tenant's directory, whereas a path recomputed
+    # from the SESSION's household id cannot address anything the caller does not own. See
+    # `app.media`.
+    #
+    # The content type is the PROVIDER's, recorded verbatim so it is never re-sniffed from
+    # attacker-controlled bytes; `app.media.served_as` decides what we are willing to hand a
+    # browser. NULL for every message with no stored file, which is nearly all of them.
+    media_content_type: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    media_byte_count: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    media_stored_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
     # The ENTIRE incremental-extraction mechanism. NULL means "not yet fed to the LLM", which is
     # why a budget abort or a redeploy mid-run self-heals: the cron just picks the NULLs back up.
     extracted_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
