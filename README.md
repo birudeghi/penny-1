@@ -24,7 +24,9 @@ Penny reads the group's conversation and extracts it into structure:
 
 Onboarding is one action with zero setup: add Penny to the group. That provisions the
 household, and she replies in the chat with the website link and the family's shared
-credentials. She only ever speaks when @-mentioned; the rest of the time she reads silently.
+credentials, then asks who the family is caring for — one question at a time, answered by
+just replying. Once she has what she needs, she only ever speaks when @-mentioned (that
+always works, including during setup); the rest of the time she reads silently.
 
 ## Who it's for
 

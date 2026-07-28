@@ -1,8 +1,10 @@
 """Did this message @-mention Penny?
 
-**Penny answers only when she is spoken to.** The paired WhatsApp number is a real account that
-sits in groups nobody linked, and outbound volume is what gets a number banned, so "reply to
-everything in a linked group" is not on the table. An explicit @-mention is the whole trigger,
+**Penny answers when she is spoken to** — an explicit @-mention, always, plus one carve-out
+this module is not part of: while the onboarding interview is open, ordinary answers to her
+own questions (see `app.interview`). The paired WhatsApp number is a real account that sits
+in groups nobody linked, and outbound volume is what gets a number banned, so "reply to
+everything in a linked group" is not on the table. The @-mention is the standing trigger,
 and this module is the only place that decides what one is.
 
 WHAT A MENTION ACTUALLY LOOKS LIKE ON THE WIRE — captured in production, not guessed:
@@ -29,8 +31,9 @@ because it is what someone types when the client did not turn their mention into
 it is still an unambiguous act of address.
 
 This module NEVER decides whether to send anything. It answers one question about one message;
-the webhook owns "is this group linked", "have we replied too often", and "does Penny have
-anything to say". In an unlinked group the answer here is not even consulted.
+the webhook's `_route_reply` owns "is this group linked", "is the interview open", "have we
+replied too often", and "does Penny have anything to say". In an unlinked group the answer
+here is not even consulted.
 """
 
 from __future__ import annotations

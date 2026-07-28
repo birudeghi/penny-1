@@ -43,18 +43,37 @@ class _Household:
 
 @dataclass
 class _Session:
-    """Records the UPDATE that clears the cursor, and answers the two SELECTs the module makes."""
+    """Records the UPDATE that clears the cursor, and answers the SELECTs the module makes.
+
+    Three shapes now cross `execute`: the recent-messages read, the timeline-events read (told
+    apart by which columns the statement selects — only the event query asks for
+    `occurred_at`), and the profile UPDATE, which only needs a `rowcount`.
+    """
 
     messages: list[tuple[str, str]] = field(default_factory=list)
+    events: list[Any] = field(default_factory=list)
     statements: list[Any] = field(default_factory=list)
     committed: bool = False
 
     async def execute(self, statement: Any, *_a: Any, **_k: Any) -> Any:
         self.statements.append(statement)
-        rows = [
-            type("Row", (), {"sender_display_name": who, "text": text})()
-            for who, text in self.messages
-        ]
+        selected = {c.key for c in getattr(statement, "selected_columns", [])}
+        if "occurred_at" in selected:
+            rows = list(self.events)
+        else:
+            rows = [
+                type(
+                    "Row",
+                    (),
+                    {
+                        "sent_at": datetime.now(UTC),
+                        "sender_display_name": who,
+                        "text": text,
+                        "message_type": "text",
+                    },
+                )()
+                for who, text in self.messages
+            ]
         session = self
 
         class _Result:
@@ -184,6 +203,59 @@ async def test_a_short_message_never_reaches_the_model() -> None:
     for noise in ("ok", "👍", "thanks!", "  "):
         assert await capture_answer(_Session(), _Household(), noise, gateway=gateway) is None
     assert gateway.specs == []
+
+
+@pytest.mark.anyio
+async def test_a_mentioned_message_skips_the_length_gate() -> None:
+    """ "@Penny hi" is short and still an act of address — silence would read as broken."""
+    gateway = _Gateway(_result(kind="answered", reply="Hello! I keep this group's timeline."))
+    outcome = await capture_answer(
+        _Session(), _Household(), "@Penny hi", mentioned=True, gateway=gateway
+    )
+    assert outcome is not None
+    assert outcome.reply is not None
+    assert outcome.kind == "answered"
+
+
+@pytest.mark.anyio
+async def test_a_mentioned_nothing_new_is_none_so_the_caller_falls_back() -> None:
+    """The prompt forbids `nothing_new` for an addressed message, so getting one anyway is a
+    broken response — and None is the signal that sends `run_interview` to the assistant."""
+    gateway = _Gateway(_result(kind="nothing_new", reply=None))
+    outcome = await capture_answer(
+        _Session(), _Household(), "@Penny who are you?", mentioned=True, gateway=gateway
+    )
+    assert outcome is None
+
+
+@pytest.mark.anyio
+async def test_an_unmentioned_nothing_new_is_still_a_quiet_outcome_not_a_fallback() -> None:
+    """The same model answer means two different things depending on who was addressed."""
+    gateway = _Gateway(_result(kind="nothing_new", reply=None))
+    outcome = await capture_answer(
+        _Session(), _Household(), "shall we do lunch on saturday", mentioned=False, gateway=gateway
+    )
+    assert outcome is not None
+    assert outcome.reply is None
+
+
+@pytest.mark.anyio
+async def test_the_model_is_told_whether_it_was_addressed() -> None:
+    for mentioned, flag in ((True, "true"), (False, "false")):
+        gateway = _Gateway(_result())
+        await capture_answer(_Session(), _Household(), ANSWER, mentioned=mentioned, gateway=gateway)
+        (spec,) = gateway.specs
+        assert f'addressed_to_penny="{flag}"' in spec.input
+
+
+@pytest.mark.anyio
+async def test_the_model_sees_the_timeline_so_a_question_is_answerable() -> None:
+    """A mention mid-interview may be a question about the record; the events block is what
+    makes it answerable from this one call instead of a second assistant call."""
+    gateway = _Gateway(_result())
+    await capture_answer(_Session(), _Household(), ANSWER, gateway=gateway)
+    (spec,) = gateway.specs
+    assert "<timeline" in spec.input
 
 
 @pytest.mark.anyio

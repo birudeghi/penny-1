@@ -45,7 +45,7 @@ from app.llm.transport import LLMTransport, get_transport
 
 log = logging.getLogger(__name__)
 
-Purpose = Literal["extract", "merge", "report", "dedup_check"]
+Purpose = Literal["extract", "merge", "report", "dedup_check", "assistant", "interview"]
 Effort = Literal["none", "low", "medium", "high", "xhigh"]
 RunStatus = Literal["ok", "incomplete", "filtered", "error", "budget_denied"]
 
