@@ -14,7 +14,7 @@
  * record habitually loses, so it gets its own hue rather than sitting in the grey pile.
  */
 
-import { formatTime, formatTimelineYear } from './datetime'
+import { formatRelativeTime, formatTime, formatTimelineYear } from './datetime'
 import type { People } from './people'
 import { assertNever, type Event } from '../types/api'
 
@@ -50,20 +50,21 @@ export function timelineKind(event: Event): TimelineKind {
 }
 
 /**
- * What goes in the small line above the headline.
+ * The short stamp beside the headline: "2h ago", "1d ago".
  *
- * A time, but ONLY when the extraction placed the event to the minute. The gutter beside every
- * entry prints a day whatever the precision — that is what a timeline is — so this line is where
- * the hedge has to live: "08:12" on an event the model could only place to the month would invent
- * a certainty no message ever carried, and it is the kind of invention a GP would act on.
+ * Relative, but ONLY as precisely as the extraction placed the event. The hedge still has to
+ * live here: "3h ago" on an event the model could only place to the day would invent a certainty
+ * no message ever carried, and it is the kind of invention a GP would act on. So day-precision
+ * events never claim hours, and anything vaguer keeps its hedge in words.
  */
-export function entryTimeLabel(event: Event, timeZone: string): string {
+export function entryTimeLabel(event: Event): string {
   switch (event.occurred_at_precision) {
     case 'exact':
-      return formatTime(event.occurred_at, timeZone)
-    case 'day':
-      // The gutter already says which day. Repeating it here would say nothing twice.
-      return ''
+      return formatRelativeTime(event.occurred_at)
+    case 'day': {
+      const days = Math.floor((Date.now() - Date.parse(event.occurred_at)) / 86_400_000)
+      return days < 1 ? 'today' : formatRelativeTime(event.occurred_at)
+    }
     case 'week':
       return 'Sometime that week'
     case 'month':

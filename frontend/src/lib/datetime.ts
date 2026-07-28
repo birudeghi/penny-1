@@ -68,6 +68,27 @@ export function formatEvidenceStamp(iso: string, timeZone: string): string {
   }).format(new Date(iso))
 }
 
+/**
+ * "2h ago" / "1d ago" / "3mo ago" — the short relative stamp beside an entry's title.
+ *
+ * No timezone parameter on purpose: elapsed time is the one rendering that is the same in every
+ * household, because it measures the distance between two instants rather than naming a wall
+ * clock.
+ */
+export function formatRelativeTime(iso: string, now = new Date()): string {
+  const seconds = Math.max(0, Math.floor((now.getTime() - Date.parse(iso)) / 1000))
+  if (seconds < 60) return 'just now'
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days}d ago`
+  if (days < 30) return `${Math.floor(days / 7)}w ago`
+  if (days < 365) return `${Math.max(1, Math.floor(days / 30))}mo ago`
+  return `${Math.floor(days / 365)}y ago`
+}
+
 /* ------------------------------------------------------- editing a date in someone else's zone */
 
 /**

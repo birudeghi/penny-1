@@ -89,10 +89,9 @@ function splitDate(date: string): { day: string; weekday: string } {
  *    width — the border is still reserved, never added — even though a phone will rarely fire the
  *    hover that colours it.
  *
- * 5. THE PHOTOGRAPH IS FILED, NOT PUBLISHED — a square in the card's right margin. It stops being
- *    a margin object and becomes a capped-width block under the text, and it stops being deleted
- *    outright below `sm`, which is what it used to be. The comment on the card's inner grid has
- *    the argument, including why that one switches a breakpoint later than everything here.
+ * 5. THE PHOTOGRAPH IS FILED, NOT PUBLISHED — a capped-width block under the text at every width,
+ *    no longer a column of its own. The card's text runs the full measure and the photographs sit
+ *    beneath it, and they stopped being deleted outright below `sm`, which is what they used to be.
  *
  * The breakpoint is `sm` (640px), not `lg`. Between 640 and 1024 the grid costs 170px of a 576px
  * measure, which is tight but honest; below 640 it is most of the screen. `lg` is where the context
@@ -106,7 +105,7 @@ export function TimelineEntry({ event, timeZone }: { event: Event; timeZone: str
 
   const date = formatTimelineDate(event.occurred_at, timeZone)
   const { day, weekday } = splitDate(date)
-  const at = entryTimeLabel(event, timeZone)
+  const at = entryTimeLabel(event)
   const kind = timelineKind(event)
 
   return (
@@ -168,110 +167,84 @@ export function TimelineEntry({ event, timeZone }: { event: Event; timeZone: str
           )}
         >
           {/*
-            A grid at `md`, and plain block flow below it, because the three pieces want two
-            different orders and only one of them may be the DOM's.
-
-            Reading down a phone the order is the entry, then the photograph filed with it, then
-            the control that opens the messages behind it. On a wide screen the photograph moves
-            into a column of its own on the right and the evidence trigger sits directly under the
-            provenance line, where the design puts it — time, headline, summary, provenance,
-            trigger, in one unbroken run. Placing the two text blocks in column one and spanning
-            the photograph down both rows gets that second order out of the first, so nothing is
-            duplicated and no reader is handed a sequence that does not match what they see.
-
-            AND IT SWITCHES AT `md`, NOT AT `sm` LIKE THE ROW AROUND IT. The two breakpoints are
-            measuring different things. The row's is about the 170px margin: at 640px that margin
-            has stopped being most of the screen, so the gutter comes back. The photograph's is
-            about what is left after it: at 640px, 170px of margin plus a 168px square plus the
-            gaps leaves under 200px for the headline, which is a worse card than one with a wide
-            photograph under the text. So the square waits for 768px and is full width until then.
+            Plain block flow at every width: headline, body and provenance run the full measure of
+            the card, the photographs are filed under the text, and only the evidence thread is
+            narrowed — capped at two-thirds of the card so a run of chat bubbles keeps a chat's
+            measure without squeezing the entry that cites it.
           */}
-          <div className="md:grid md:grid-cols-[minmax(0,1fr)_168px] md:gap-x-5">
-            <div className="min-w-0 md:col-start-1 md:row-start-1">
-              <div className="flex items-center gap-2.5 sm:items-baseline sm:gap-3">
-                {/* Below `sm` this row is the date gutter, folded into the card: the node the
-                    spine used to carry, then the date the margin used to print. Two elements
-                    rendered here and hidden at `sm` rather than moved by CSS — `display: none`
-                    keeps the hidden copy out of the accessibility tree too, so the kind is
-                    announced exactly once at every width. */}
-                <span className="sm:hidden">
-                  <KindNode kind={kind} size="sm" />
-                </span>
-                <span className="text-[13px] font-semibold tracking-tight tabular-nums sm:hidden">
-                  {date}
-                </span>
+          <div className="mb-1.5 flex items-center gap-2.5 sm:hidden">
+            {/* Below `sm` this row is the date gutter, folded into the card: the node the spine
+                used to carry, then the date the margin used to print. `display: none` at `sm`
+                keeps the hidden copy out of the accessibility tree too, so the kind is announced
+                exactly once at every width. */}
+            <KindNode kind={kind} size="sm" />
+            <span className="text-[13px] font-semibold tracking-tight tabular-nums">{date}</span>
+          </div>
 
-                {at && (
-                  <span className="text-[13px] text-muted-foreground tabular-nums">{at}</span>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setEditing(true)}
-                  // Twenty identical "Edit" buttons are indistinguishable to a screen reader, so
-                  // the entry's title goes in the accessible name rather than in a tooltip.
-                  aria-label={`Edit “${event.title}”`}
-                  className={cn(
-                    'ml-auto text-[12.5px] text-muted-foreground transition-opacity',
-                    'sm:pointer-fine:opacity-0 group-hover:opacity-100 hover:text-foreground',
-                    'focus-visible:opacity-100',
-                    // A 44px TARGET AROUND A 23px WORD. The padding grows the hit area and the
-                    // negative margin gives the space back to the layout, so the button lands in
-                    // exactly the same place it did before and is now tappable. This is the
-                    // control that corrects a wrong dose; measured at 23x24 on a phone, which is
-                    // a quarter of the minimum, on the device where the correction gets typed.
-                    'inline-flex min-h-[44px] items-center px-3 py-3 -my-3 -mr-3',
-                  )}
-                >
-                  Edit
-                </button>
-              </div>
+          <div className="flex items-baseline gap-3">
+            <h3 className="min-w-0 text-[17.5px] leading-snug font-semibold tracking-tight text-balance">
+              {event.title}
+            </h3>
 
-              <h3 className="mt-1.5 text-[17.5px] leading-snug font-semibold tracking-tight text-balance">
-                {event.title}
-              </h3>
+            {at && (
+              <span className="shrink-0 text-[13px] whitespace-nowrap text-muted-foreground tabular-nums">
+                {at}
+              </span>
+            )}
 
-              {event.body && (
-                <p className="mt-1.5 max-w-[68ch] text-[14px] leading-relaxed break-words text-muted-foreground">
-                  {event.body}
-                </p>
+            <button
+              type="button"
+              onClick={() => setEditing(true)}
+              // Twenty identical "Edit" buttons are indistinguishable to a screen reader, so
+              // the entry's title goes in the accessible name rather than in a tooltip.
+              aria-label={`Edit “${event.title}”`}
+              className={cn(
+                'ml-auto shrink-0 text-[12.5px] text-muted-foreground transition-opacity',
+                'sm:pointer-fine:opacity-0 group-hover:opacity-100 hover:text-foreground',
+                'focus-visible:opacity-100',
+                // A 44px TARGET AROUND A 23px WORD. The padding grows the hit area and the
+                // negative margin gives the space back to the layout, so the button lands in
+                // exactly the same place it did before and is now tappable. This is the
+                // control that corrects a wrong dose; measured at 23x24 on a phone, which is
+                // a quarter of the minimum, on the device where the correction gets typed.
+                'inline-flex min-h-[44px] items-center px-3 py-3 -my-3 -mr-3',
               )}
+            >
+              Edit
+            </button>
+          </div>
 
-              <p className="mt-2.5 text-[12.5px] text-muted-foreground">
-                {provenanceOf(event, timeZone, people)}
-              </p>
-            </div>
+          {event.body && (
+            <p className="mt-1.5 max-w-[68ch] text-[14px] leading-relaxed break-words text-muted-foreground">
+              {event.body}
+            </p>
+          )}
 
-            {/*
-              Inside the card, and beside the text: the photographs are filed with the entry, not
-              published under it. Narrower than `md` the column stops existing and they become the
-              width of the card — capped at 280px, so that on a phone they are as big as the
-              screen can make them and on a tablet they are photographs filed under an entry
-              rather than an entry reduced to captioning them. This used to be `hidden sm:block`,
-              which on the one screen that matters most deleted the best evidence in the record.
+          <p className="mt-2.5 text-[12.5px] text-muted-foreground">
+            {provenanceOf(event, timeZone, people)}
+          </p>
 
-              ONE PHOTOGRAPH IS 168px; TWO OR MORE WIDEN THE COLUMN. DESIGN.md §3.6 said a fixed
-              168px square because for a long time one was all there was. Three photographs at
-              168px are three unreadable crops, and a picture of a wound that cannot be read is
-              decoration — the one thing the "filed, not published" rule says it must not be. What
-              does NOT change is the card's height: the strip runs horizontally precisely so that
-              photo count can never drive entry height. A vertical stack was drawn and rejected
-              for exactly that. The timeline's rhythm is the design; nothing inside a card may set
-              the card's height except its prose.
-            */}
-            <EntryPhotos
-              eventId={event.id}
-              photos={event.photos ?? []}
-              withheld={event.photos_withheld ?? 0}
-              unavailable={event.photos_unavailable ?? 0}
-              timeZone={timeZone}
-            />
+          {/*
+            Filed under the text, not published beside it: capped at 280px so that on a phone the
+            photographs are as big as the screen can make them and on a wide card they stay
+            photographs filed with an entry rather than an entry reduced to captioning them. What
+            does NOT change is the card's height: the strip runs horizontally precisely so that
+            photo count can never drive entry height. The timeline's rhythm is the design; nothing
+            inside a card may set the card's height except its prose.
+          */}
+          <EntryPhotos
+            eventId={event.id}
+            photos={event.photos ?? []}
+            withheld={event.photos_withheld ?? 0}
+            unavailable={event.photos_unavailable ?? 0}
+            timeZone={timeZone}
+          />
 
-            {/* `empty:hidden` because `Evidence` renders nothing for a hand-written entry, and a
-                margin under nothing is still a margin — a card with an invisible 14px of extra
-                foot is exactly the kind of drift that makes a list of cards look hand-spaced. */}
-            <div className="mt-3.5 empty:hidden md:col-start-1 md:row-start-2">
-              <Evidence excerpts={event.source_excerpts} timeZone={timeZone} />
-            </div>
+          {/* `empty:hidden` because `Evidence` renders nothing for a hand-written entry, and a
+              margin under nothing is still a margin — a card with an invisible 14px of extra
+              foot is exactly the kind of drift that makes a list of cards look hand-spaced. */}
+          <div className="mt-3.5 empty:hidden md:max-w-[66%]">
+            <Evidence excerpts={event.source_excerpts} timeZone={timeZone} />
           </div>
         </div>
       )}
@@ -340,7 +313,7 @@ function EntryPhotos({
   const single = photos.length === 1
 
   return (
-    <div className="mt-4 w-full max-w-[280px] md:col-start-2 md:row-span-2 md:row-start-1 md:mt-0 md:self-start md:[--photo-col:168px] md:w-[var(--photo-col)] md:data-[strip=true]:w-[248px]">
+    <div className="mt-4 w-full max-w-[280px]">
       {photos.length > 0 && (
         <figure className="w-full" data-strip={!single}>
           <div className={cn('grid gap-1.5', single ? 'grid-cols-1' : 'grid-cols-3')}>
@@ -373,8 +346,8 @@ function EntryPhotos({
             photos.length > 0 ? 'mt-1.5' : '',
           )}
         >
-          {unavailable === 1 ? 'A photo was' : `${unavailable} photos were`} shared here. WhatsApp
-          exports do not include the files.
+          {unavailable === 1 ? 'A photo was' : `${unavailable} photos were`} shared here but not
+          included in the WhatsApp export.
         </p>
       )}
 
@@ -445,7 +418,7 @@ export function EntryPhoto({
       aria-label={altFor(derived)}
       className={cn(
         'block w-full overflow-hidden rounded-lg bg-band',
-        square ? 'aspect-square' : 'aspect-[4/3] md:aspect-square',
+        square ? 'aspect-square' : 'aspect-[4/3]',
       )}
     >
       {failed ? (

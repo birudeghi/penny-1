@@ -68,10 +68,8 @@ export function Evidence({
 
           {spoken > 0 && (
             <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
-              {spoken === 1 ? 'One of these was spoken' : `${spoken} of these were spoken`}, not
-              typed, and written down automatically. Names, medicines and doses are the words that
-              get misheard — the original recording is still in the WhatsApp chat if something
-              reads oddly.
+              {spoken === 1 ? 'One of these was transcribed' : `${spoken} of these were transcribed`}{' '}
+              automatically from a voice note — the original recording is still in WhatsApp.
             </p>
           )}
         </div>
