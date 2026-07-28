@@ -66,6 +66,70 @@ the one-photo-one-entry dedup rule.
 
 ---
 
+## One Penny: unify assistant.py and interview.py into a single responder
+
+**What:** Merge the two conversational LLM modules — `assistant.py` (mention replies) and
+`interview.py` (onboarding capture) — into one responder module with one prompt: one Penny
+for all group speech, whatever the interview state.
+
+**Why:** The mention-routing PR (branch `fix-onboarding-mention-bug`) made the interview
+call answer questions during onboarding and extracted a shared core, but left two prompts
+and two modules. Two voices drift; the next conversational feature would add a third.
+
+**Pros:** Single prompt to eval, no drift between Penny's onboarding voice and her
+steady-state voice, deletes roughly two files of parallel machinery.
+
+**Cons:** The assistant's safety machinery — `is_emergency` short-circuit, server-authored
+disclaimer lines keyed off `ReplyKind`, URL stripping — has to be rewritten inside the
+merged module, and both eval suites need rebuilding before it ships. It is its own careful
+PR, not a rider.
+
+**Context:** the eng review of 2026-07-28 found six verified duplications between the two
+files (`_load_prompt` assistant.py:165/interview.py:92, `_recent_messages` :421/:284,
+`_truncate` :516/:306, the 700-char reply cap and finish logic, the gateway wiring with the
+private `_HouseholdBudget` import, and the `cast(Purpose, ...)` workaround), plus one
+safety asymmetry: `is_emergency` ran only on the assistant path. The shared-core extraction
+in that PR is the first half of this work; this TODO is the second half.
+
+**Where to start:** the shared module that PR created — everything still imported by both
+`assistant.py` and `interview.py` after it lands is the remaining merge surface.
+
+**Depends on:** `fix-onboarding-mention-bug` landing, and `scripts/eval_interview.py`
+existing as the safety net for prompt behavior changes.
+
+---
+
+## Answer @-mentions in photo captions
+
+**What:** Reply when a family sends a photo whose caption @-mentions Penny ("@Penny is
+this rash worse?"). Today that message earns silence.
+
+**Why:** Captions are deliberately dropped at ingest (`webhooks.py _classify` — a caption
+without its picture reads as a non-sequitur and would pre-empt the photo description), so
+the mention in the caption never reaches the reply path as text. Families will
+caption-mention photos of symptoms, and silence there reads as broken.
+
+**Pros:** Closes the last "Penny ignored me" gap in mention coverage; the media
+description pipeline already produces the text a reply would need.
+
+**Cons:** The reply cannot be useful until the photo's model description has landed, so
+this needs an answer-after-derivation flow — new sequencing, not a routing tweak. A
+payload-only mention (photo, no usable text) can also reach the reply scheduler with empty
+text today; the mention-routing PR pins that to silence with a test, which this work would
+deliberately unpin.
+
+**Context:** eng review of 2026-07-28. The mention may survive in the stored payload
+(`mentioned_jid`-style fields, `mentions.py:_payload_mentions`) even though the caption
+text is dropped, so detection is already possible; only the reply timing is unsolved.
+
+**Where to start:** `derive_in_background` (webhooks.py) — it already knows the moment the
+description lands; a mention check there is the natural trigger.
+
+**Depends on:** `fix-onboarding-mention-bug` landing (it defines the routing this would
+extend).
+
+---
+
 ## E2E test framework
 
 **What:** Stand up Playwright so browser-level user-flow tests exist at all.

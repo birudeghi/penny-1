@@ -68,8 +68,8 @@ flowchart TB
                 transcribe["Transcription<br/>download media, transcribe,<br/>mark the payload"]
                 derive["Media derivation<br/>store the bytes, describe them,<br/>mark the excerpt derived"]
                 reports["Report generation<br/>one call over a year,<br/>every claim cited"]
-                interview["Onboarding interview<br/>read the answer, write the<br/>care profile, say it back"]
-                assistant["@-mention reply<br/>answer from the record only"]
+                interview["Onboarding interview<br/>record answers, answer mentions,<br/>say it back — one call"]
+                assistant["@-mention reply<br/>answer from the record only<br/>(and interview fallback)"]
                 extraction["Extraction service<br/>advisory lock · cadence gate<br/>budget guard · bounded batch"]
                 runner["Chunk + overlap · concurrent<br/>structured calls · validate<br/>merge · deduplicate"]
                 persist["Persist<br/>protect human edits<br/>stamp extracted_at"]
@@ -180,8 +180,9 @@ GOWA delivers  POST /api/whatsapp/webhook
       └─ 200, then background work on `inserted` only  ← a GOWA retry costs nothing
             │
             ├─ audio?            transcribe, then extract (one task, ordered)
-            ├─ interview open?   the interview owns this message
-            └─ else @-mention?   the assistant answers
+            ├─ @-mention?        interview open → the interview answers AND records
+            │                    (assistant fallback) · closed → the assistant answers
+            └─ else?             interview open + long enough → the interview listens
 ```
 
 The webhook answers within GOWA's 10-second budget and never raises: GOWA retries five times on
@@ -196,14 +197,19 @@ in all of them. Everything here is downstream of that.
 
 | Trigger | Who answers | Gate |
 |---|---|---|
-| `group.joined` | the welcome, with credentials | startup quiet period **and** the `known_groups` ledger |
-| any message, interview open | the interview | linked group, length floor, 14-day window, rate limit |
-| `@Penny …`, interview closed | the assistant | linked group, explicit mention, rate limit |
+| `group.joined` | the welcome (credentials, then one question) | startup quiet period **and** the `known_groups` ledger |
+| `@Penny …`, interview open | the interview, in the same call that records — assistant fallback | linked group, explicit mention, mention budget |
+| `@Penny …`, interview closed | the assistant | linked group, explicit mention, mention budget |
+| any other message, interview open | the interview | linked group, length floor, 14-day window, interview budget |
 | anything else | nobody | — |
 
-**The interview owns a message while it is open.** Without one owner, a family answering with a
-polite @-mention would earn both an interview read-back and an assistant reply to the same
-message.
+**A mention is always answered, and one owner speaks per message.** The mention verdict is
+decided first. During the open interview it routes to the interview call itself — one Penny,
+answering the question and recording the answer in one reply, with the assistant as fallback
+so a mention is never swallowed — because two owners would earn a family who @-mentions her
+while answering her question two replies. The two reply budgets are independent (mentions
+generous, unprompted interview turns tight), so onboarding can never starve a mention of its
+answer.
 
 **Join gates.** `whatsmeow` re-emits `JoinedGroup` during app-state sync for groups the account
 was already in, and GOWA has no guard for it. So a join inside the startup quiet period is

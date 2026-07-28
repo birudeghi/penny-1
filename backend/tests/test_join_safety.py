@@ -250,14 +250,20 @@ def just_reconnected(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def _reset_process_state() -> Iterator[None]:
-    """The paired-number cache and the reply limiter are module globals; isolate the tests."""
+    """The paired-number cache and the reply limiter are module globals; isolate the tests.
+
+    The limiter is a dict of per-budget ledgers whose keys are structural — clear the
+    LEDGERS, never the outer dict, or `_reply_allowed` loses its budgets entirely.
+    """
     webhooks._own_jid = None
     webhooks._own_jid_expires_at = 0.0
-    webhooks._reply_hits.clear()
+    for ledger in webhooks._reply_hits.values():
+        ledger.clear()
     yield
     webhooks._own_jid = None
     webhooks._own_jid_expires_at = 0.0
-    webhooks._reply_hits.clear()
+    for ledger in webhooks._reply_hits.values():
+        ledger.clear()
 
 
 @pytest.fixture

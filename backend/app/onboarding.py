@@ -298,7 +298,7 @@ async def _create(
 
 
 def welcome_message(username: str, passphrase: str, public_url: str) -> str:
-    """The first thing a family ever sees from this product.
+    """The first thing a family ever sees from this product. Credentials and the contract.
 
     Plain text: WhatsApp has no markdown, and asterisks meant as emphasis render as literal
     asterisks around a password someone then types in.
@@ -308,25 +308,21 @@ def welcome_message(username: str, passphrase: str, public_url: str) -> str:
     read it — so that has to be said plainly rather than discovered. And it has to say the
     password can be changed, or the only remedy anyone knows about is a new group.
 
-    It also ASKS FOR CONTEXT, in the chat, right at the start. That is not politeness: the care
-    recipient's name and background are the single largest input to extraction quality, because
-    they are what turns "she had a bad night again" into a fact about a named person, and what
-    stops a sibling's own dentist appointment being filed as care. Asking in the group beats
-    waiting for someone to fill in a form, because the answer arrives as an ordinary message and
-    is therefore ingested and visible to extraction from that moment on.
-
-    Asked as three specific questions rather than "tell me about them" — an open prompt gets a
-    one-word reply, and the third question is where the durable facts live (conditions,
-    medications, the GP's name) that later messages assume you already know.
-
-    IT ALSO STATES THE ONE RULE ABOUT WHEN PENNY SPEAKS, and that paragraph is not copy, it is
-    the product's contract. Penny is paired to a real WhatsApp account that belongs to real
-    group chats, and the reason this line exists is that she once answered in all of them. A
-    family that has been told "she only replies when @-mentioned" can tell a stray message from
-    a broken bot; more importantly, saying it here is what makes silence everywhere else a
-    documented behaviour rather than something a family reads as Penny being broken. The handle
-    is spelled out because a member who has not saved the number sees a phone number in the
+    IT STATES THE RULES ABOUT WHEN PENNY SPEAKS, and that paragraph is not copy, it is the
+    product's contract. Penny is paired to a real WhatsApp account that belongs to real group
+    chats, and the reason this paragraph exists is that she once answered in all of them.
+    There are two rules now, and both are stated: while she is getting set up she replies to
+    ordinary answers here (no mention needed), and any other time she replies only when
+    @-mentioned. A family that has been told this can tell a stray message from a broken bot;
+    more importantly, saying it here is what makes silence everywhere else a documented
+    behaviour rather than something a family reads as Penny being broken. The handle is
+    spelled out because a member who has not saved the number sees a phone number in the
     @-picker and will not recognise it as her.
+
+    THE QUESTIONS ARE NOT HERE ANY MORE. They arrive in `welcome_question_message`, one at a
+    time, so the first thing a family reads is not a wall of text ending in homework. This
+    message must stand alone regardless: the second send can fail, and a family holding
+    credentials and a stated contract has everything they cannot recover by other means.
     """
     url = public_url.rstrip("/")
     return (
@@ -344,22 +340,40 @@ def welcome_message(username: str, passphrase: str, public_url: str) -> str:
         f"Username: {username}\n"
         f"Password: {passphrase}\n"
         "\n"
-        "To get me started, could someone reply here with:\n"
-        "\n"
-        "1. Who you're looking after, and what you call them in this chat\n"
-        "2. Roughly their age, and how they live day to day\n"
-        "3. Anything ongoing worth knowing — conditions, medications, their GP or hospital\n"
-        "\n"
-        "That last one matters more than it sounds. It is what lets me understand a message "
-        'like "she had a bad night again" months from now, instead of guessing who "she" is. '
-        "You can also add it at Settings on the website.\n"
-        "\n"
-        "After that I stay out of the way. I only reply when someone @-mentions me: type @ and "
-        f"pick {PENNY_HANDLE_NAME} from the list, or just write {PENNY_HANDLE} in your message, "
-        "and I will answer here. Any other time I am reading quietly and keeping the timeline "
-        "up to date — no replies, no notifications.\n"
+        "While we get set up, I'll ask a few questions here — just reply, no need to mention "
+        f"me. Any other time, I only reply when someone @-mentions me: type @ and pick "
+        f"{PENNY_HANDLE_NAME} from the list, or just write {PENNY_HANDLE} in your message, and "
+        "I will answer here. The rest of the time I am reading quietly and keeping the "
+        "timeline up to date — no replies, no notifications.\n"
         "\n"
         "Two things worth knowing: this message contains your password, so anyone added to this "
         "group later can scroll back and read it, and you can change it in Settings whenever "
         "you like."
+    )
+
+
+def welcome_question_message() -> str:
+    """The second send: ONE question, not three.
+
+    ASKING FOR CONTEXT in the chat, right at the start, is not politeness: the care
+    recipient's name and background are the single largest input to extraction quality,
+    because they are what turns "she had a bad night again" into a fact about a named person,
+    and what stops a sibling's own dentist appointment being filed as care. Asking in the
+    group beats waiting for someone to fill in a form, because the answer arrives as an
+    ordinary message and is therefore ingested and visible to extraction from that moment on.
+
+    ONE question rather than the old block of three, because the interview
+    (`app.interview`) now paces the rest: it reads each answer, records it, and asks for the
+    single next thing still missing. A question wall gets skimmed; a conversation gets
+    answered. The interview's close rule is unchanged — it keeps asking, one at a time, until
+    everything the old three questions covered has been answered or the family declines.
+
+    Its own function rather than a parameter, because the caller sends it through a DIFFERENT
+    door: no credentials in it, so it takes the default sanitised path, and a failure to send
+    it is a nuisance rather than a lockout (see `send_welcome`).
+    """
+    return (
+        "To get started: who are you looking after, and what do you call them in this chat? "
+        "Just reply here — I'll ask about the rest as we go. You can also fill everything in "
+        "at Settings on the website."
     )

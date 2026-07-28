@@ -33,11 +33,18 @@
    **When in doubt, stay silent.** A missed welcome is a support conversation. A password in a
    stranger's group chat cannot be unsent.
 
-4. **Penny speaks only when spoken to.** A reply goes out for an explicit @-mention in a LINKED
-   group and for nothing else. In an unlinked group a mention is ignored exactly like any other
-   message — the mention is not a second onboarding trigger, because that is the same bug in a
-   new hat. Replies are rate-limited per household: every one is an LLM call and an outbound
-   WhatsApp message, and outbound volume is what gets the paired number banned.
+4. **Penny speaks when spoken to — and while she is asking, to answers.** Two ways a message
+   in a LINKED group earns a reply, decided in `_route_reply`: an explicit @-mention, always;
+   and, while the onboarding interview is open, an ordinary message long enough to be an
+   answer to her questions — nobody @-mentions a bot to reply to it. A mention during the open
+   interview goes to the SAME interview call (one Penny, one visible reply — see
+   `app.interview`'s docstring), with the assistant as fallback so a mention is never silently
+   swallowed. Once the interview closes, the mention is the only trigger, forever. In an
+   unlinked group a mention is ignored exactly like any other message — the mention is not a
+   second onboarding trigger, because that is the same bug in a new hat. Replies are
+   rate-limited per household with two independent budgets (mentions generous, unprompted
+   interview turns tight): every reply is an LLM call and an outbound WhatsApp message, and
+   outbound volume is what gets the paired number banned.
 
 5. **A VOICE NOTE IS TRANSCRIBED BEFORE IT IS EXTRACTED, AND BOTH HAPPEN AFTER THE 200.**
    Fetching the audio from GOWA and sending it to a speech model is seconds of work against a
@@ -87,7 +94,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import gowa, outbound
-from app.assistant import answer_mention
+from app.assistant import EMERGENCY_REPLY, answer_mention, is_emergency, strip_mention
 from app.config import get_settings
 from app.db import get_sessionmaker
 from app.deps import SessionDep
@@ -113,7 +120,7 @@ from app.interview import should_listen as should_listen_for_interview
 from app.media import DERIVABLE_MESSAGE_TYPES, derive_media_text
 from app.mentions import has_mention_marker, mentions_penny, normalise_jid
 from app.models import Household, Message
-from app.onboarding import provision_for_group, welcome_message
+from app.onboarding import provision_for_group, welcome_message, welcome_question_message
 from app.transcription import AUDIO_MESSAGE_TYPES, transcribe_voice_note
 
 log = logging.getLogger(__name__)
@@ -191,20 +198,39 @@ COMMIT_WAIT_SECONDS = 0.25
 # Strong references to detached extraction tasks. See `spawn_extraction`.
 _RUNNING: set[asyncio.Task[None]] = set()
 
-# --- @-mention replies ---------------------------------------------------------------------
+# --- reply budgets -------------------------------------------------------------------------
 
-# A FEW PER HOUR, PER HOUSEHOLD, AND THAT IS THE POINT. Each reply is one OpenAI call and one
-# outbound WhatsApp message from a real, unappealable, single paired account — and outbound
-# volume is the thing that gets such an account banned. The whole plan rests on Penny's outbound
-# rate being near zero, so this is deliberately far below what a chatty family would generate.
-# Exceeding it is not an error the family should see: Penny simply says nothing, which is the
-# same thing she does for any message that is not addressed to her.
-MAX_REPLIES_PER_HOUSEHOLD = 10
+# TWO BUDGETS, PER HOUSEHOLD, AND THE ASYMMETRY IS THE POINT. Each reply is one OpenAI call
+# and one outbound WhatsApp message from a real, unappealable, single paired account — and
+# outbound volume is the thing that gets such an account banned. The whole plan rests on
+# Penny's outbound rate being near zero. But the two ways she speaks carry different risk:
+# an @-mention is a family ASKING, so its ceiling is set where no real family will ever feel
+# it (30/hr is a reply every two minutes, sustained, for an hour) and exists only against a
+# runaway loop; an interview turn is Penny speaking to a message that did not address her,
+# the louder of the two, so it keeps the tight original budget. Independent windows, so an
+# onboarding questionnaire in full flow can never starve a mention of its answer.
+#
+# In-process, so a multi-worker deploy multiplies each ceiling by the worker count — two
+# workers can pass 2x each. That is accepted the same way `app.ratelimit` accepts it: this is
+# a safety valve on a handful of households, not an SLA, and a shared counter is not worth a
+# second datastore. Exceeding a budget is not an error the family should see: Penny simply
+# says nothing, which is the same thing she does for any message that is not addressed to her.
+MENTION_REPLIES_PER_HOUSEHOLD = 30
+INTERVIEW_REPLIES_PER_HOUSEHOLD = 10
 REPLY_WINDOW_SECONDS = 3600.0
 # Enough households to cover every real one many times over; the bound only exists so a forged
 # stream of chat ids cannot grow this dict without limit. Oldest key is evicted first.
 _REPLY_LIMIT_MAX_KEYS = 512
-_reply_hits: OrderedDict[UUID, deque[float]] = OrderedDict()
+_MENTION_BUDGET = "mention"
+_INTERVIEW_BUDGET = "interview"
+_BUDGET_CAPS = {
+    _MENTION_BUDGET: MENTION_REPLIES_PER_HOUSEHOLD,
+    _INTERVIEW_BUDGET: INTERVIEW_REPLIES_PER_HOUSEHOLD,
+}
+_reply_hits: dict[str, OrderedDict[UUID, deque[float]]] = {
+    _MENTION_BUDGET: OrderedDict(),
+    _INTERVIEW_BUDGET: OrderedDict(),
+}
 
 # The paired account's own JID, so a mention can be recognised. It arrives free on every webhook
 # envelope as `device_id` (the runbook's captured body confirms the shape:
@@ -595,36 +621,28 @@ async def gowa_webhook(
             derive=message_type in DERIVABLE_MESSAGE_TYPES,
         )
 
-    # (f) The reply path, and the ONLY one. A linked group, a new message (not a replay), and an
-    # explicit @-mention. `inserted` is what makes a GOWA retry free: five deliveries of one
-    # mention must be one answer, not five.
+    # (f) The reply path, and the ONLY one. A linked group and a new message (not a replay).
+    # `inserted` is what makes a GOWA retry free: five deliveries of one mention must be one
+    # answer, not five.
     reply = "not_mentioned"
     if result.inserted:
-        # (f1) THE INTERVIEW OWNS THE MESSAGE WHILE IT IS OPEN, and that ownership is what
-        # stops Penny answering the same message twice. A family answering "who are you looking
-        # after?" sometimes @-mentions her out of politeness, and without a single owner that
-        # one message would earn both an interview read-back and an assistant reply. While the
-        # care profile is unestablished the interview takes every message; once it is
-        # established `should_listen` returns False forever and the mention path is the only
-        # one left. Unlike the reply path this does NOT require a mention — nobody @-mentions a
-        # bot to answer its own question, they just reply, which is the whole reason the answer
-        # was being dropped before this existed.
-        reply = await _maybe_schedule_interview(
+        # (f1) THE MENTION IS DECIDED FIRST, AND ONE OWNER SPEAKS. An explicit @-mention is
+        # always answered — during onboarding by the interview call itself (one Penny: it
+        # answers the question and records the answer in the same reply, with the assistant as
+        # fallback so a mention can never be silently swallowed), afterwards by the assistant.
+        # An UNMENTIONED message is the interview's while it is open — nobody @-mentions a bot
+        # to answer its own question, they just reply, which is the whole reason answers were
+        # being dropped before the interview existed — and nobody's once `should_listen`
+        # returns False forever. One owner per message is what stops a family who @-mentions
+        # Penny while answering her question earning two replies.
+        reply = await _route_reply(
             background,
             household_id=result.household_id,
             chat_id=payload.chat_id,
             provider_message_id=payload.id,
             text=text,
+            raw_payload=raw_payload,
         )
-        if reply == "interview_not_open":
-            reply = await _maybe_schedule_reply(
-                background,
-                household_id=result.household_id,
-                chat_id=payload.chat_id,
-                provider_message_id=payload.id,
-                text=text,
-                raw_payload=raw_payload,
-            )
     return {"status": "ok", "inserted": result.inserted, "reply": reply}
 
 
@@ -850,19 +868,16 @@ async def send_welcome(household_id: UUID, chat_id: str, username: str, passphra
         if not await _was_a_solitary_join(household_id, chat_id):
             return
         message = welcome_message(username, passphrase, get_settings().app_public_url)
-        # trusted=True — the ONLY server-authored send in the app. Both halves of that matter:
-        # every word of `welcome_message` is ours, and the passphrase inside it would not
-        # survive the length cap the untrusted path applies. When the onboarding interview
-        # starts sending model-authored follow-ups, they go out the default door, not this one.
+        # trusted=True — the ONLY server-authored send that needs it. Both halves of that
+        # matter: every word of `welcome_message` is ours, and the passphrase inside it would
+        # not survive the length cap the untrusted path applies. The question that follows
+        # carries no credentials and goes out the default door like everything else.
         result = await outbound.send_to_group(chat_id, message, trusted=True)
-        if result.ok:
-            log.info(
-                "webhook.welcome_sent",
-                extra={"household_id": str(household_id), "chat_id": chat_id},
-            )
-        else:
+        if not result.ok:
             # The household id, so an operator can find the family and hand over the
             # credentials by another route. The credentials themselves stay out of the log.
+            # No question either: a question from a bot that never introduced itself, in a
+            # group that never got its login, is noise on top of a failure.
             log.error(
                 "webhook.welcome_send_failed",
                 extra={
@@ -871,6 +886,26 @@ async def send_welcome(household_id: UUID, chat_id: str, username: str, passphra
                     "error": result.error,
                 },
             )
+            return
+        log.info(
+            "webhook.welcome_sent",
+            extra={"household_id": str(household_id), "chat_id": chat_id},
+        )
+        # THE SECOND SEND IS CONDITIONAL ON THE FIRST. Credentials-without-question leaves a
+        # family with everything they cannot recover another way — the interview window is 14
+        # days and a human can always ask the question by hand. Question-without-credentials
+        # would be a stranger interrogating a group chat. So the failure mode is chosen, not
+        # accidental: a failed question is a WARNING an operator can follow up, never a retry
+        # storm in a family's first minute.
+        question = await outbound.send_to_group(chat_id, welcome_question_message())
+        log.info(
+            "webhook.welcome_question_sent" if question.ok else "webhook.welcome_question_failed",
+            extra={
+                "household_id": str(household_id),
+                "chat_id": chat_id,
+                "error": question.error,
+            },
+        )
     except Exception:
         log.exception("webhook.welcome_failed", extra={"household_id": str(household_id)})
 
@@ -1004,8 +1039,8 @@ async def resolve_own_jid() -> str | None:
         return jid
 
 
-def _reply_allowed(household_id: UUID) -> bool:
-    """Consume one reply slot for this household, or refuse.
+def _reply_allowed(household_id: UUID, budget: str) -> bool:
+    """Consume one reply slot from ONE budget for this household, or refuse.
 
     Consumed at SCHEDULING time, not at send time, because the cost being capped is the LLM call
     as much as the outbound message — a reply that turns out to be "say nothing" has still spent
@@ -1013,53 +1048,116 @@ def _reply_allowed(household_id: UUID) -> bool:
     safety valve on a handful of households and a shared counter is not worth a second datastore
     (the same trade `app.ratelimit` documents at length).
 
-    In-process means a multi-worker deploy allows up to `workers * MAX_REPLIES_PER_HOUSEHOLD`.
-    Two workers, four each: still single digits an hour, still far below anything that looks
-    like automation to WhatsApp.
+    `budget` is `_MENTION_BUDGET` or `_INTERVIEW_BUDGET`. The windows are independent by
+    design — see the block comment above the caps: an interview in full flow must not spend
+    the slots a mention needs, and vice versa.
     """
     now = time.monotonic()
-    hits = _reply_hits.get(household_id)
+    ledger = _reply_hits[budget]
+    hits = ledger.get(household_id)
     if hits is None:
-        if len(_reply_hits) >= _REPLY_LIMIT_MAX_KEYS:
-            _reply_hits.popitem(last=False)
-        hits = _reply_hits[household_id] = deque()
-    _reply_hits.move_to_end(household_id)
+        if len(ledger) >= _REPLY_LIMIT_MAX_KEYS:
+            ledger.popitem(last=False)
+        hits = ledger[household_id] = deque()
+    ledger.move_to_end(household_id)
     cutoff = now - REPLY_WINDOW_SECONDS
     while hits and hits[0] <= cutoff:
         hits.popleft()
-    if len(hits) >= MAX_REPLIES_PER_HOUSEHOLD:
+    if len(hits) >= _BUDGET_CAPS[budget]:
         return False
     hits.append(now)
     return True
 
 
-async def _maybe_schedule_interview(
+async def _route_reply(
     background: BackgroundTasks,
     *,
     household_id: UUID,
     chat_id: str,
     provider_message_id: str,
     text: str | None,
+    raw_payload: dict[str, Any],
 ) -> str:
-    """Decide whether this message is the interview's. Returns the reason, for the response body.
+    """Pick the ONE owner of this message's reply, or nobody. Returns the reason.
 
-    `interview_not_open` is the ONE return value the caller acts on: it is what hands the
-    message back to the mention path. Every other outcome — too short, window closed, rate
-    limited — means the interview considered this message and is done with it, and the mention
-    path must not get a second go, because "we already decided not to speak" is not the same as
-    "nobody has decided yet".
+        message (linked group, newly inserted)
+          │
+          ├─ @-mention? ──────────────────── yes ─┬─ no usable text ──────── silence
+          │                                       ├─ mention budget spent ── silence
+          │                                       ├─ interview open ──────── interview turn
+          │                                       │                          (assistant fallback)
+          │                                       └─ interview closed ────── assistant reply
+          └─ no ─┬─ interview open AND text ≥ MIN_ANSWER_CHARS
+                 │      ├─ interview budget spent ── silence
+                 │      └─ else ──────────────────── interview turn
+                 └─ otherwise ─────────────────────── silence
 
-    Reads the household on the request's own session, which is cheap and already open. The LLM
-    call is not here: the handler owes GOWA a 200 inside 10 seconds.
+    The ordering is cheapest-first and that is not a micro-optimisation: `has_mention_marker`
+    is pure string work and rejects every message without an `@`, which is nearly all of them,
+    so `resolve_own_jid` is never reached on the hot path — and the household row is only read
+    for the few messages that might earn a reply at all.
+
+    A mentioned message with no usable text (a photo with Penny picked from the @-list — the
+    caption is deliberately dropped at ingest, see `_classify`) stays silent: there is no
+    question to answer, and answering a picture we have not yet read would be a guess.
+
+    Nothing here calls the LLM or GOWA. It hands off to `BackgroundTasks`, because the handler
+    owes GOWA a 200 well inside 10 seconds and an LLM call is seconds to minutes; blowing that
+    budget means a retry, and a retry means the family gets the same answer twice.
     """
+    mentioned = has_mention_marker(text, raw_payload) and mentions_penny(
+        text, raw_payload, await resolve_own_jid()
+    )
+    if mentioned:
+        if not text or not text.strip():
+            return "not_mentioned"
+        if not _reply_allowed(household_id, _MENTION_BUDGET):
+            # Silence, not an apology: an "I'm rate limited" message is itself an outbound
+            # message.
+            log.warning(
+                "webhook.reply_rate_limited",
+                extra={
+                    "household_id": str(household_id),
+                    "chat_id": chat_id,
+                    "limit": MENTION_REPLIES_PER_HOUSEHOLD,
+                    "window_seconds": REPLY_WINDOW_SECONDS,
+                },
+            )
+            return "rate_limited"
+        household = await _session_household(household_id)
+        if household is not None and should_listen_for_interview(household):
+            log.info(
+                "webhook.interview_scheduled",
+                extra={
+                    "household_id": str(household_id),
+                    "chat_id": chat_id,
+                    "provider_message_id": provider_message_id,
+                    "mentioned": True,
+                },
+            )
+            background.add_task(
+                spawn_interview, household_id, chat_id, provider_message_id, text, True
+            )
+            return "interview_mention"
+        log.info(
+            "webhook.reply_scheduled",
+            extra={
+                "household_id": str(household_id),
+                "chat_id": chat_id,
+                "provider_message_id": provider_message_id,
+            },
+        )
+        background.add_task(spawn_reply, household_id, chat_id, provider_message_id, text)
+        return "scheduled"
+
     if not text or len(text.strip()) < MIN_ANSWER_CHARS:
-        return "interview_not_open"
+        return "not_mentioned"
     household = await _session_household(household_id)
     if household is None or not should_listen_for_interview(household):
-        return "interview_not_open"
-    if not _reply_allowed(household_id):
-        # The same limiter the mention path uses, and deliberately the same budget: the
-        # interview is Penny speaking unprompted, which is the louder of the two.
+        return "not_mentioned"
+    if not _reply_allowed(household_id, _INTERVIEW_BUDGET):
+        # Its own tight budget: the interview is Penny speaking to a message that did not
+        # address her, the louder of the two ways she talks.
         log.warning(
             "webhook.interview_rate_limited",
             extra={"household_id": str(household_id), "chat_id": chat_id},
@@ -1071,9 +1169,10 @@ async def _maybe_schedule_interview(
             "household_id": str(household_id),
             "chat_id": chat_id,
             "provider_message_id": provider_message_id,
+            "mentioned": False,
         },
     )
-    background.add_task(spawn_interview, household_id, chat_id, provider_message_id, text or "")
+    background.add_task(spawn_interview, household_id, chat_id, provider_message_id, text, False)
     return "interview"
 
 
@@ -1082,9 +1181,12 @@ async def spawn_interview(
     chat_id: str,
     provider_message_id: str,
     text: str,
+    mentioned: bool,
 ) -> None:
     """DETACH the interview turn, for the same reason `spawn_reply` detaches — see there."""
-    task = asyncio.create_task(run_interview(household_id, chat_id, provider_message_id, text))
+    task = asyncio.create_task(
+        run_interview(household_id, chat_id, provider_message_id, text, mentioned)
+    )
     _RUNNING.add(task)
     task.add_done_callback(_RUNNING.discard)
 
@@ -1094,6 +1196,7 @@ async def run_interview(
     chat_id: str,
     provider_message_id: str,
     text: str,
+    mentioned: bool,
 ) -> None:
     """Record what the family said about the person they care for, and say it back.
 
@@ -1102,12 +1205,34 @@ async def run_interview(
     them, and a connection opened before the request committed cannot see the one that just
     arrived.
 
+    TWO GUARANTEES FOR A MENTIONED TURN, because a mention must always be answered:
+
+    * The emergency short-circuit runs HERE, before any model call, with the same
+      server-authored words the assistant path uses. It used to live only in `answer_mention`,
+      which meant "@Penny mum collapsed" during onboarding would have gone to a language model
+      with no fixed words to fall back on — the one moment silence or improvisation is worst.
+    * A turn that produces nothing — the interview closed in a race, the model returned a
+      broken response, the capture failed — falls back to `send_reply`, the assistant path,
+      rather than silence. The capture is lost for that message (extraction still reads it);
+      the answer is not.
+
     `chat_id` comes from the delivery that triggered this and is never derived from the
     household, so there is no path by which one family's read-back reaches another's group.
     """
     try:
         if not await _await_commit(household_id, provider_message_id):
             log.warning("webhook.interview_message_never_committed", extra={"chat_id": chat_id})
+            return
+        if mentioned and is_emergency(strip_mention(text)):
+            result = await outbound.send_to_group(chat_id, EMERGENCY_REPLY)
+            log.info(
+                "webhook.emergency_reply_sent" if result.ok else "webhook.emergency_send_failed",
+                extra={
+                    "household_id": str(household_id),
+                    "chat_id": chat_id,
+                    "error": result.error,
+                },
+            )
             return
         async with get_sessionmaker()() as session:
             household = await session.get(Household, household_id)
@@ -1117,14 +1242,28 @@ async def run_interview(
                     extra={"household_id": str(household_id)},
                 )
                 return
-            outcome = await capture_answer(session, household, text)
+            outcome = await capture_answer(session, household, text, mentioned=mentioned)
             if outcome is None:
+                if mentioned:
+                    log.info(
+                        "webhook.interview_fallback_to_assistant",
+                        extra={"household_id": str(household_id), "chat_id": chat_id},
+                    )
+                    await send_reply(household_id, chat_id, provider_message_id, text)
                 return
             # COMMIT THE RECORD BEFORE SPEAKING. The read-back tells a family what Penny now
             # knows; saying it and then failing to store it is the exact failure this module
             # was built to remove, and it is worse the second time because they have been told.
             await session.commit()
         if outcome.reply is None:
+            if mentioned:
+                # The record is committed — the capture succeeded — but a mentioned message
+                # still has no answer, and that is the assistant's job now.
+                log.info(
+                    "webhook.interview_fallback_to_assistant",
+                    extra={"household_id": str(household_id), "chat_id": chat_id},
+                )
+                await send_reply(household_id, chat_id, provider_message_id, text)
             return
         result = await outbound.send_to_group(chat_id, outcome.reply)
         log.info(
@@ -1135,6 +1274,7 @@ async def run_interview(
                 "kind": outcome.kind,
                 "brief_changed": outcome.brief_changed,
                 "messages_recalled": outcome.messages_recalled,
+                "mentioned": mentioned,
                 "error": result.error,
             },
         )
@@ -1146,55 +1286,6 @@ async def _session_household(household_id: UUID) -> Household | None:
     """The household row, on its own short-lived session. None when it is not there yet."""
     async with get_sessionmaker()() as session:
         return await session.get(Household, household_id)
-
-
-async def _maybe_schedule_reply(
-    background: BackgroundTasks,
-    *,
-    household_id: UUID,
-    chat_id: str,
-    provider_message_id: str,
-    text: str | None,
-    raw_payload: dict[str, Any],
-) -> str:
-    """Decide whether this message earns an answer. Returns the reason, for the response body.
-
-    Reached ONLY for a linked group and a newly inserted message — see the call site. The
-    ordering is cheapest-first and that is not a micro-optimisation: `has_mention_marker` is pure
-    string work and rejects every message without an `@`, which is nearly all of them, so
-    `resolve_own_jid` is never reached on the hot path and the sidecar is never consulted for
-    ordinary family chat.
-
-    Nothing here calls the LLM or GOWA. It hands off to `BackgroundTasks`, because the handler
-    owes GOWA a 200 well inside 10 seconds and an LLM call is seconds to minutes; blowing that
-    budget means a retry, and a retry means the family gets the same answer twice.
-    """
-    if not has_mention_marker(text, raw_payload):
-        return "not_mentioned"
-    if not mentions_penny(text, raw_payload, await resolve_own_jid()):
-        return "not_mentioned"
-    if not _reply_allowed(household_id):
-        # Silence, not an apology: an "I'm rate limited" message is itself an outbound message.
-        log.warning(
-            "webhook.reply_rate_limited",
-            extra={
-                "household_id": str(household_id),
-                "chat_id": chat_id,
-                "limit": MAX_REPLIES_PER_HOUSEHOLD,
-                "window_seconds": REPLY_WINDOW_SECONDS,
-            },
-        )
-        return "rate_limited"
-    log.info(
-        "webhook.reply_scheduled",
-        extra={
-            "household_id": str(household_id),
-            "chat_id": chat_id,
-            "provider_message_id": provider_message_id,
-        },
-    )
-    background.add_task(spawn_reply, household_id, chat_id, provider_message_id, text or "")
-    return "scheduled"
 
 
 async def spawn_reply(
