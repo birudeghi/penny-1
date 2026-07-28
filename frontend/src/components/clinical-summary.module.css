@@ -1,11 +1,10 @@
 /*
  * "What Penny hands the GP."
  *
- * A tinted block, not a card and not a feed entry. The point of the treatment is that this is a
- * DIFFERENT KIND OF OBJECT from the record beneath it — something you generate, read, hand over
- * and throw away — so it borrows none of `feed-card`'s vocabulary: no kind rail, no left border,
- * no per-kind hue. One flat band, a little wider-feeling than a card, and rules rather than
- * boxes to separate its parts.
+ * The document reads like a printed page: one white sheet, rules rather than boxes between its
+ * parts, and none of the timeline's vocabulary — no kind rail, no spine, no per-kind hue. It is
+ * still a different kind of object from the record beneath it: something you generate, read,
+ * hand over and throw away.
  */
 
 /*
@@ -48,191 +47,11 @@
   text-decoration: none;
 }
 
-.panel {
-  margin: 16px 0 28px;
-  border-radius: var(--radius);
-  background: var(--surface-2);
-  padding: 24px 26px;
-}
-
-.head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 6px 16px;
-}
-
-.title {
-  margin: 0;
-  font-size: 19px;
-  line-height: 1.1;
-}
-
-.meta {
-  margin: 0;
-  font-size: 13px;
-  color: var(--text);
-}
-
-/* Pushed to the trailing edge so the title and its provenance read as one line. */
-.actions {
-  margin-left: auto;
-  display: flex;
-  gap: 16px;
-}
-
 /*
- * The urgent band. Never colour alone: the word "Urgent" is in the text, so the state survives
- * a greyscale print — and this page is printed.
+ * The document itself is styled in the component with Tailwind — it only ever renders inside
+ * `.record`, where the ported reset is in scope. What stays here is the trigger pill and the
+ * pre-document states, which carry the sweep animation and its reduced-motion override.
  */
-.urgent {
-  margin: 16px 0 0;
-  border: 1px solid var(--danger);
-  background: var(--danger-bg);
-  color: var(--danger);
-  border-radius: var(--radius);
-  padding: 10px 12px;
-  font-size: 14px;
-  line-height: 150%;
-}
-
-.lead {
-  margin: 18px 0 0;
-  max-width: 72ch;
-  font-size: 16px;
-  line-height: 160%;
-  color: var(--text-h);
-}
-
-.sections {
-  margin-top: 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.heading {
-  margin: 0;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--text);
-}
-
-.body {
-  margin: 6px 0 0;
-  max-width: 72ch;
-  font-size: 15px;
-  line-height: 160%;
-  color: var(--text-h);
-}
-
-/*
- * The citation chips. These carry the same promise the feed's "read the message this came from"
- * makes, one level up — so they are buttons-shaped-as-links, not decoration, and each one names
- * the handle that appears in the prose above it. Without the handle, a reader with four chips
- * and three `[E]` markers has no way to tell which is which.
- */
-.cites {
-  margin-top: 8px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  list-style: none;
-  padding: 0;
-}
-
-.cite {
-  display: inline-block;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface);
-  padding: 3px 10px;
-  font-size: 12px;
-  color: var(--text);
-  text-decoration: none;
-}
-
-.cite:hover {
-  border-color: var(--accent-border);
-  color: var(--text-h);
-}
-
-.citeHandle {
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--accent);
-}
-
-/*
- * Three lists side by side: what to ask, what to watch, and what the record cannot tell you.
- * The last one is the honest half — a summary that only reports what it found reads as more
- * complete than it is — so it is given equal width rather than being tucked underneath.
- */
-.lists {
-  margin-top: 26px;
-  border-top: 1px solid var(--border);
-  padding-top: 20px;
-  display: grid;
-  gap: 22px;
-}
-
-@media (min-width: 720px) {
-  .lists {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-
-.list {
-  margin: 8px 0 0;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-/*
- * A hanging marker, not a disc: two wrapped lines in a narrow column run together without one,
- * and the third column is the honest half of the summary — it has to be as scannable as the two
- * beside it or it reads as a footnote.
- */
-.listItem {
-  display: flex;
-  gap: 8px;
-  font-size: 14px;
-  line-height: 145%;
-  color: var(--text-h);
-}
-
-.listItem::before {
-  content: '·';
-  color: var(--text);
-  flex: none;
-}
-
-.listMuted .listItem {
-  color: var(--text);
-}
-
-/*
- * The rule runs the full width of the panel, matching the one above the three lists; only the
- * text is measured. A border that stops where a paragraph happens to end reads as a mistake.
- */
-.footnote {
-  margin: 24px 0 0;
-  border-top: 1px solid var(--border);
-  padding-top: 14px;
-  font-size: 12px;
-  line-height: 155%;
-  color: var(--text);
-}
-
-.footnoteText {
-  display: block;
-  max-width: 76ch;
-}
 
 /* --- the states before there is a document ------------------------------------------- */
 

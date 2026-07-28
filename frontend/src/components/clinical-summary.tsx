@@ -31,14 +31,27 @@
  * and stripped its marker out of the prose, so everything rendered here points at a real entry.
  */
 
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
+import { CopyCheckIcon, CopyIcon } from '@hugeicons/core-free-icons'
+import { HugeiconsIcon } from '@hugeicons/react'
 
 import { ApiError } from '../api/client'
 import { useGenerateReport, useHousehold, useReport, useReports } from '../api/queries'
 import { formatDate } from '../lib/datetime'
 import type { Report, ReportSection } from '../types/api'
 import { cx } from './cx'
+import { Kbd } from './ui/kbd'
+import { Pip } from './ui/pip'
 import styles from './clinical-summary.module.css'
+
+/*
+ * The panel's two actions share one quiet shape. Tailwind rather than the CSS module because the
+ * panel only ever renders inside `.record`, where the ported reset is in scope — the pre-document
+ * states keep their module styles because they carry the sweep animation and the reduced-motion
+ * override, which have no Tailwind spelling worth inventing.
+ */
+const actionButton =
+  'inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-rule bg-card px-3.5 text-[12.5px] font-medium text-penny transition-colors hover:bg-band'
 
 /**
  * 422 is the server's "there is not enough in the record yet", and it is the one 4xx that gets
@@ -176,19 +189,24 @@ function Panel({
   )
 
   return (
-    <article className={styles.panel}>
-      <div className={styles.head}>
-        <h3 className={styles.title}>{report.title}</h3>
-        <p className={styles.meta}>
-          {report.generated_at
-            ? `Generated ${formatDate(report.generated_at, timeZone)}`
-            : 'Just written'}
-          {' · '}
-          {/* Counted, never hardcoded: it says how much of the record this page traces to, and
-              a number typed by hand stops being true the next time a section is dropped. */}
-          {cited.size === 1 ? 'traces to 1 entry' : `traces to ${cited.size} entries`}
-        </p>
-        <span className={styles.actions}>
+    <article className="mt-4 mb-7 rounded-xl border border-rule bg-card px-6 py-6 shadow-[0_1px_2px_rgb(0_0_0/0.03)] sm:px-8 sm:py-7">
+      <header className="flex flex-wrap items-start gap-x-4 gap-y-3">
+        <div className="min-w-0 flex-1">
+          <h3 className="text-[19px] leading-tight font-semibold tracking-tight">
+            {report.title}
+          </h3>
+          <p className="mt-1 text-[12.5px] text-muted-foreground">
+            {report.generated_at
+              ? `Generated ${formatDate(report.generated_at, timeZone)}`
+              : 'Just written'}
+            {' · '}
+            {/* Counted, never hardcoded: it says how much of the record this page traces to, and
+                a number typed by hand stops being true the next time a section is dropped. */}
+            {cited.size === 1 ? 'traces to 1 entry' : `traces to ${cited.size} entries`}
+          </p>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2">
           <CopyButton report={report} timeZone={timeZone} />
           {/*
             Offered rather than automatic. A summary written this morning is not stale by
@@ -196,28 +214,33 @@ function Panel({
             allowance every time somebody looked at it. The server refuses the second one a day
             with a sentence, which is exactly what the error state above renders.
           */}
-          <button type="button" className={styles.trigger} onClick={onRegenerate}>
-            Write a new one
+          <button type="button" className={actionButton} onClick={onRegenerate}>
+            Regenerate
           </button>
-        </span>
-      </div>
+        </div>
+      </header>
 
       {report.urgent_flag && report.urgent_reason ? (
-        <p className={styles.urgent} role="alert">
+        <p
+          className="mt-5 rounded-lg border border-destructive/40 bg-destructive/5 px-3.5 py-2.5 text-[14px] leading-relaxed text-destructive"
+          role="alert"
+        >
           <strong>Urgent — </strong>
           {report.urgent_reason}
         </p>
       ) : null}
 
-      {report.summary ? <p className={styles.lead}>{report.summary}</p> : null}
+      {report.summary ? (
+        <p className="mt-5 max-w-[72ch] text-[15.5px] leading-relaxed">{report.summary}</p>
+      ) : null}
 
-      <div className={styles.sections}>
+      <div className="mt-7 flex flex-col gap-6">
         {report.sections.map((section) => (
           <Section key={section.heading} section={section} timeZone={timeZone} />
         ))}
       </div>
 
-      <div className={styles.lists}>
+      <div className="mt-7 grid gap-6 border-t border-rule pt-6 sm:grid-cols-3">
         <List title="Questions for the doctor" items={report.questions_for_the_doctor} />
         <List title="Worth watching" items={report.watch_items} />
         <List title="Not in the record" items={report.data_gaps} muted />
@@ -228,11 +251,10 @@ function Panel({
         what they are holding: a family's own account, written up by a machine, not a clinical
         note. Everything above it is only safe to read that way.
       */}
-      <p className={styles.footnote}>
-        <span className={styles.footnoteText}>
-          Written by Penny from the family&rsquo;s own WhatsApp messages. Every line above traces
-          to an entry in the record below it. Penny reports what was said and when — it does not
-          diagnose, it does not advise, and it does not decide what is connected to what.
+      <p className="mt-7 border-t border-rule pt-4 text-[12px] leading-relaxed text-muted-foreground">
+        <span className="block max-w-[76ch]">
+          Written by Penny from the family&rsquo;s own WhatsApp messages — it reports what was
+          said, and it does not diagnose or advise.
         </span>
       </p>
     </article>
@@ -242,26 +264,39 @@ function Panel({
 function Section({ section, timeZone }: { section: ReportSection; timeZone: string }) {
   return (
     <section>
-      <h4 className={styles.heading}>{section.heading}</h4>
+      <h4 className="text-[15px] font-semibold tracking-tight">{section.heading}</h4>
       {/*
         Rendered as plain text, and the field name is the only thing markdown about it: the
         prompt forbids headings, lists and bold, so the body is prose carrying `[E1]` footnote
         markers. Running it through a markdown renderer would buy nothing and would put an
-        HTML-injection surface between a model and a family's screen.
+        HTML-injection surface between a model and a family's screen. The one transformation
+        made is the markers themselves, promoted to small keycaps — and only when the marker
+        matches one of this section's own citation handles, so prose that happens to contain
+        brackets stays prose.
       */}
-      <p className={styles.body}>{section.body_markdown}</p>
+      <p className="mt-1.5 max-w-[72ch] text-[14.5px] leading-relaxed">
+        {withCitationKeys(section.body_markdown, section.citations.map((c) => c.handle))}
+      </p>
       {section.citations.length > 0 ? (
-        <ul className={styles.cites}>
+        <ul className="mt-2.5 flex flex-wrap gap-1.5">
           {section.citations.map((citation) => (
-            <li key={citation.handle} className={styles.cite}>
+            <li key={citation.handle}>
               {/*
                 Labelled with the handle as well as the date, because the prose above carries
                 `[E1]` markers and four chips with three markers is otherwise a puzzle. Not a
                 link: there is no per-entry anchor in the feed yet, and a button that does
                 nothing when pressed is a worse promise than a label that can be read.
               */}
-              <span className={styles.citeHandle}>{citation.handle}</span>{' '}
-              {formatDate(citation.occurred_at, timeZone)} · {citation.title}
+              <Pip className="bg-rule">
+                <Pip.Segment className="bg-band font-mono text-[10.5px] font-semibold text-penny">
+                  {citation.handle}
+                </Pip.Segment>
+                <Pip.Segment className="max-w-[38ch] bg-card text-muted-foreground">
+                  <span className="truncate">
+                    {formatDate(citation.occurred_at, timeZone)} · {citation.title}
+                  </span>
+                </Pip.Segment>
+              </Pip>
             </li>
           ))}
         </ul>
@@ -270,14 +305,50 @@ function Section({ section, timeZone }: { section: ReportSection; timeZone: stri
   )
 }
 
+/** Escapes a citation handle so it can sit inside the marker regexp verbatim. */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/** `[E1]` in the prose becomes a keycap, but only for this section's real handles. */
+function withCitationKeys(body: string, handles: string[]): ReactNode {
+  if (handles.length === 0) return body
+  const marker = new RegExp(`\\[(${handles.map(escapeRegExp).join('|')})\\]`, 'g')
+  // Splitting on a capture group interleaves prose and handles: odd indices are the handles.
+  return body
+    .split(marker)
+    .map((part, index) =>
+      index % 2 === 1 ? (
+        <Kbd key={index} className="mx-px font-mono text-[10.5px]">
+          {part}
+        </Kbd>
+      ) : (
+        part
+      ),
+    )
+}
+
 function List({ title, items, muted }: { title: string; items: string[]; muted?: boolean }) {
   if (items.length === 0) return null
   return (
-    <div className={cx(muted && styles.listMuted)}>
-      <h4 className={styles.heading}>{title}</h4>
-      <ul className={styles.list}>
+    <div>
+      <h4 className="text-[11px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">
+        {title}
+      </h4>
+      <ul className="mt-2.5 flex flex-col gap-2">
         {items.map((item) => (
-          <li key={item} className={styles.listItem}>
+          <li
+            key={item}
+            className={cx(
+              'flex gap-2 text-[13.5px] leading-normal',
+              muted && 'text-muted-foreground',
+            )}
+          >
+            {/* A hanging marker, not a disc: two wrapped lines in a narrow column run together
+                without one. */}
+            <span aria-hidden className="flex-none text-muted-foreground">
+              ·
+            </span>
             {item}
           </li>
         ))}
@@ -308,7 +379,8 @@ function CopyButton({ report, timeZone }: { report: Report; timeZone: string }) 
   }
 
   return (
-    <button type="button" className={styles.trigger} onClick={() => void onCopy()}>
+    <button type="button" className={actionButton} onClick={() => void onCopy()}>
+      <HugeiconsIcon icon={copied ? CopyCheckIcon : CopyIcon} size={14} strokeWidth={1.8} />
       {copied ? 'Copied' : 'Copy'}
     </button>
   )
@@ -334,8 +406,7 @@ function asPlainText(report: Report, timeZone: string): string {
 
   lines.push(
     '',
-    'Written by Penny from the family’s own WhatsApp messages. Penny reports what was said and',
-    'when — it does not diagnose and it does not advise.',
+    'Written by Penny from the family’s own WhatsApp messages — it reports what was said, and it does not diagnose or advise.',
   )
   return lines.join('\n')
 }
