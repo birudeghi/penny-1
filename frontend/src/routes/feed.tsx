@@ -98,7 +98,7 @@ export function FeedRoute() {
                 the sixty-second poll, and the server's one-a-day limit would turn every one of
                 those into a 429 the family did not cause.
               */}
-              <div className="mb-6 flex justify-end">
+              <div className="mb-6">
                 <ClinicalSummary />
               </div>
 

@@ -32,7 +32,7 @@
  */
 
 import { useState, type ReactNode } from 'react'
-import { CopyCheckIcon, CopyIcon } from '@hugeicons/core-free-icons'
+import { CopyCheckIcon, CopyIcon, Refresh03Icon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 
 import { ApiError } from '../api/client'
@@ -40,6 +40,7 @@ import { useGenerateReport, useHousehold, useReport, useReports } from '../api/q
 import { formatDate } from '../lib/datetime'
 import type { Report, ReportSection } from '../types/api'
 import { cx } from './cx'
+import { ButtonGroup } from './ui/button-group'
 import { Kbd } from './ui/kbd'
 import { Pip } from './ui/pip'
 import styles from './clinical-summary.module.css'
@@ -89,22 +90,42 @@ export function ClinicalSummary() {
     generate.mutate(undefined, { onSuccess: (accepted) => setStartedId(accepted.report_id) })
   }
 
+  const error = generate.error ?? report.error
+
+  // The finished document carries its own Hide button, so the trigger pill above it would be a
+  // second copy of the same control. It stays for every state that has no header of its own —
+  // closed, writing, failed, too thin — and steps aside only for the document itself. The row
+  // wrapper is also the stretch fix: the trigger must never share a flex row with the panel, or
+  // `align-items: stretch` draws it as tall as the whole document.
+  const panelShowing =
+    open && !generating && !error && report.data !== undefined && report.data.status !== 'failed'
+
   return (
-    <>
-      <button type="button" className={styles.trigger} onClick={onTrigger} aria-expanded={open}>
-        {triggerLabel({ open, generating, hasReport: activeId !== null })}
-      </button>
+    <div>
+      {!panelShowing && (
+        <div className="flex justify-end">
+          <button
+            type="button"
+            className={styles.trigger}
+            onClick={onTrigger}
+            aria-expanded={open}
+          >
+            {triggerLabel({ open, generating, hasReport: activeId !== null })}
+          </button>
+        </div>
+      )}
 
       {open ? (
         <Body
           report={report.data}
-          error={generate.error ?? report.error}
+          error={error}
           generating={generating}
           timeZone={timeZone}
           onRegenerate={start}
+          onHide={() => setOpen(false)}
         />
       ) : null}
-    </>
+    </div>
   )
 }
 
@@ -132,9 +153,10 @@ interface BodyProps {
   generating: boolean
   timeZone: string
   onRegenerate: () => void
+  onHide: () => void
 }
 
-function Body({ report, error, generating, timeZone, onRegenerate }: BodyProps) {
+function Body({ report, error, generating, timeZone, onRegenerate, onHide }: BodyProps) {
   if (error instanceof ApiError && error.status === TOO_THIN) {
     return (
       <State title="Not enough recorded yet">
@@ -172,17 +194,19 @@ function Body({ report, error, generating, timeZone, onRegenerate }: BodyProps) 
       </State>
     )
   }
-  return <Panel report={report} timeZone={timeZone} onRegenerate={onRegenerate} />
+  return <Panel report={report} timeZone={timeZone} onRegenerate={onRegenerate} onHide={onHide} />
 }
 
 function Panel({
   report,
   timeZone,
   onRegenerate,
+  onHide,
 }: {
   report: Report
   timeZone: string
   onRegenerate: () => void
+  onHide: () => void
 }) {
   const cited = new Set(
     report.sections.flatMap((section) => section.citations.map((citation) => citation.event_id)),
@@ -207,15 +231,23 @@ function Panel({
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
-          <CopyButton report={report} timeZone={timeZone} />
-          {/*
-            Offered rather than automatic. A summary written this morning is not stale by
-            lunchtime, and a panel that regenerated on open would spend a family's daily
-            allowance every time somebody looked at it. The server refuses the second one a day
-            with a sentence, which is exactly what the error state above renders.
-          */}
-          <button type="button" className={actionButton} onClick={onRegenerate}>
-            Regenerate
+          {/* The two actions that do something to the document share one grouped shape; Hide
+              only puts it away, so it stands apart. */}
+          <ButtonGroup>
+            <CopyButton report={report} timeZone={timeZone} />
+            {/*
+              Offered rather than automatic. A summary written this morning is not stale by
+              lunchtime, and a panel that regenerated on open would spend a family's daily
+              allowance every time somebody looked at it. The server refuses the second one a day
+              with a sentence, which is exactly what the error state above renders.
+            */}
+            <button type="button" className={actionButton} onClick={onRegenerate}>
+              <HugeiconsIcon icon={Refresh03Icon} size={14} strokeWidth={1.8} />
+              Regenerate
+            </button>
+          </ButtonGroup>
+          <button type="button" className={actionButton} onClick={onHide}>
+            Hide
           </button>
         </div>
       </header>
